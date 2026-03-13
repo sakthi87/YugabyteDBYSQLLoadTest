@@ -1,0 +1,555 @@
+<!DOCTYPE html>
+<html>
+  <head>
+    <meta charset="utf-8" />
+    <title>YSQL Load Test Dashboard</title>
+    <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+    <style>
+      :root {
+        --bg: #0f111a;
+        --panel: #161a2b;
+        --text: #e5e7eb;
+        --muted: #9ca3af;
+        --accent: #60a5fa;
+        --accent2: #34d399;
+        --accent3: #fbbf24;
+      }
+      body {
+        margin: 0;
+        font-family: "Segoe UI", Tahoma, sans-serif;
+        background: var(--bg);
+        color: var(--text);
+      }
+      header {
+        padding: 16px 20px;
+        border-bottom: 1px solid #2a2f45;
+        background: #0c0f1a;
+        display: flex;
+        align-items: center;
+        gap: 16px;
+      }
+      header h1 {
+        font-size: 18px;
+        margin: 0;
+      }
+      main {
+        padding: 0;
+        display: grid;
+        grid-template-columns: 240px 1fr;
+        min-height: calc(100vh - 60px);
+        height: calc(100vh - 60px);
+      }
+      .sidebar {
+        background: #0c0f1a;
+        border-right: 1px solid #2a2f45;
+        padding: 16px 12px;
+      }
+      .tab {
+        display: block;
+        width: 100%;
+        text-align: left;
+        margin-bottom: 8px;
+        padding: 10px 12px;
+        border-radius: 8px;
+        border: 1px solid #2a2f45;
+        background: #111827;
+        color: var(--text);
+        cursor: pointer;
+      }
+      .tab.active {
+        background: #1f2937;
+        border-color: #3b82f6;
+      }
+      .content {
+        padding: 20px 20px;
+        overflow: auto;
+      }
+      .row {
+        display: grid;
+        grid-template-columns: 1fr 1fr;
+        gap: 16px;
+      }
+      .panel {
+        background: var(--panel);
+        border: 1px solid #2a2f45;
+        border-radius: 10px;
+        padding: 16px;
+        max-height: 520px;
+        overflow: auto;
+      }
+      .chart-box {
+        height: 260px;
+      }
+      .chart-box canvas {
+        width: 100% !important;
+        height: 100% !important;
+      }
+      @media (max-width: 1200px) {
+        main {
+          grid-template-columns: 200px 1fr;
+        }
+        .row {
+          grid-template-columns: 1fr;
+        }
+      }
+      @media (max-width: 900px) {
+        main {
+          grid-template-columns: 1fr;
+        }
+        .sidebar {
+          border-right: none;
+          border-bottom: 1px solid #2a2f45;
+        }
+      }
+      select, button {
+        background: #111827;
+        border: 1px solid #2a2f45;
+        color: var(--text);
+        padding: 8px 10px;
+        border-radius: 6px;
+      }
+      table {
+        width: 100%;
+        border-collapse: collapse;
+        font-size: 12px;
+      }
+      th, td {
+        padding: 6px 8px;
+        border-bottom: 1px solid #2a2f45;
+      }
+      th {
+        text-align: left;
+        color: var(--muted);
+      }
+      .muted { color: var(--muted); }
+    </style>
+  </head>
+  <body>
+    <header>
+      <h1>YSQL Load Test Dashboard</h1>
+      <div class="muted">Run Set:</div>
+      <select id="runSetSelect"></select>
+      <button id="refreshBtn">Refresh</button>
+    </header>
+    <main>
+      <div class="sidebar">
+        <div class="muted" style="margin-bottom: 8px;">Views</div>
+        <button class="tab active" data-view="summary">Summary Comparison</button>
+        <div class="muted" style="margin: 12px 0 6px;">Runs</div>
+        <div id="runTabs"></div>
+      </div>
+      <div class="content">
+        <div id="summaryView">
+          <div class="panel">
+            <h3>Run Comparison (latest step per op)</h3>
+            <div class="muted">Shows latest step per operation across the 4 runs.</div>
+            <table id="compareTable" style="margin-top: 12px;"></table>
+          </div>
+          <div class="panel" style="margin-top: 20px;">
+            <h3>Operation Comparison at Each TPS (p95 ms)</h3>
+            <div class="muted">Compares SELECT/INSERT/UPDATE/DELETE for each scenario at 200/400/600 TPS.</div>
+            <div id="summaryOpByTps" style="margin-top: 12px;"></div>
+          </div>
+          <div class="panel" style="margin-top: 20px;">
+            <h3>Operation Trends Across TPS (p95 ms)</h3>
+            <div class="muted">For each scenario, shows how each operation changes from 200 → 400 → 600 TPS.</div>
+            <div id="summaryOpAcrossTps" style="margin-top: 12px;"></div>
+          </div>
+        </div>
+        <div id="runView" style="display: none;">
+          <div class="row">
+        <div class="panel">
+          <h3>TPS - SELECT</h3>
+          <div class="chart-box"><canvas id="tpsSelect"></canvas></div>
+        </div>
+        <div class="panel">
+          <h3>TPS - INSERT</h3>
+          <div class="chart-box"><canvas id="tpsInsert"></canvas></div>
+        </div>
+      </div>
+      <div class="row" style="margin-top: 20px;">
+        <div class="panel">
+          <h3>TPS - UPDATE</h3>
+          <div class="chart-box"><canvas id="tpsUpdate"></canvas></div>
+        </div>
+        <div class="panel">
+          <h3>TPS - DELETE</h3>
+          <div class="chart-box"><canvas id="tpsDelete"></canvas></div>
+        </div>
+      </div>
+      <div class="row" style="margin-top: 20px;">
+        <div class="panel">
+          <h3>Latency p90/p95/p99 (ms) - SELECT</h3>
+          <div class="chart-box"><canvas id="latSelect"></canvas></div>
+        </div>
+        <div class="panel">
+          <h3>Latency p90/p95/p99 (ms) - INSERT</h3>
+          <div class="chart-box"><canvas id="latInsert"></canvas></div>
+        </div>
+      </div>
+      <div class="row" style="margin-top: 20px;">
+        <div class="panel">
+          <h3>Latency p90/p95/p99 (ms) - UPDATE</h3>
+          <div class="chart-box"><canvas id="latUpdate"></canvas></div>
+        </div>
+        <div class="panel">
+          <h3>Latency p90/p95/p99 (ms) - DELETE</h3>
+          <div class="chart-box"><canvas id="latDelete"></canvas></div>
+        </div>
+      </div>
+          <div class="panel" style="margin-top: 20px;">
+            <h3>Run Metadata</h3>
+            <div id="runMeta" class="muted"></div>
+          </div>
+          <div class="panel" style="margin-top: 20px;">
+            <h3>Run Details</h3>
+            <table id="dataTable"></table>
+          </div>
+        </div>
+      </div>
+    </main>
+    <script>
+      const runSetSelect = document.getElementById("runSetSelect");
+      const refreshBtn = document.getElementById("refreshBtn");
+      const runMeta = document.getElementById("runMeta");
+      const runTabs = document.getElementById("runTabs");
+      const summaryView = document.getElementById("summaryView");
+      const runView = document.getElementById("runView");
+      const summaryOpByTps = document.getElementById("summaryOpByTps");
+      const summaryOpAcrossTps = document.getElementById("summaryOpAcrossTps");
+      const charts = {};
+      let runsCache = [];
+      let runLabelById = {};
+
+      async function fetchJson(url) {
+        const res = await fetch(url);
+        return res.json();
+      }
+
+      function parseCsv(text) {
+        const lines = text.trim().split("\n");
+        const headers = lines[0].split(",");
+        const rows = lines.slice(1).map(line => {
+          const cols = line.split(",");
+          const obj = {};
+          headers.forEach((h, i) => obj[h] = cols[i] || "");
+          return obj;
+        });
+        return rows;
+      }
+
+      function inferLabelFromSummary(summary) {
+        const schema = summary && summary.schema && summary.schema.schema_sql_file;
+        const sqlFile = schema && schema.sql_file ? schema.sql_file : "";
+        if (sqlFile.includes("schema_plain.sql")) return "plain_no_index_no_fk";
+        if (sqlFile.includes("schema_index.sql")) return "index_no_fk";
+        if (sqlFile.includes("schema_fk.sql")) return "fk_no_index";
+        if (sqlFile.includes("schema_index_fk.sql")) return "index_and_fk";
+        return "";
+      }
+
+      async function loadRunSets() {
+        const runsets = await fetchJson("/api/runsets");
+        runSetSelect.innerHTML = "";
+        const sorted = runsets.runsets.slice().sort();
+        sorted.forEach(name => {
+          const opt = document.createElement("option");
+          opt.value = name;
+          opt.textContent = name;
+          runSetSelect.appendChild(opt);
+        });
+        if (sorted.length) {
+          runSetSelect.value = sorted[sorted.length - 1];
+        }
+      }
+
+      async function loadRunsForRunset(runset) {
+        const runs = await fetchJson(`/api/runset/${runset}/runs`);
+        runTabs.innerHTML = "";
+        runLabelById = {};
+        runsCache = runs.runs.slice().sort();
+        for (const name of runsCache) {
+          let label = "";
+          try {
+            const summary = await fetchJson(`/api/run/${runset}/${name}/summary`);
+            label = summary.run_label || inferLabelFromSummary(summary);
+          } catch (_) {
+            label = "";
+          }
+          runLabelById[name] = label || name;
+          const tab = document.createElement("button");
+          tab.className = "tab";
+          tab.dataset.view = "run";
+          tab.dataset.run = name;
+          tab.textContent = label ? `${name} | ${label}` : name;
+          tab.addEventListener("click", () => activateRun(runset, name));
+          runTabs.appendChild(tab);
+        }
+        const firstRun = runsCache[runsCache.length - 1];
+        if (firstRun) {
+          activateRun(runset, firstRun);
+        }
+      }
+
+      function drawCharts(rows) {
+        const pg = rows.filter(r => r.type === "pgbench");
+        const ops = ["select", "insert", "update", "delete"];
+        ops.forEach(op => {
+          const opRows = pg.filter(r => (r.operation || "").toLowerCase() === op);
+          const labels = opRows.map(r => r.step || r.phase);
+          const tps = opRows.map(r => Number(r.tps || 0));
+          const p90 = opRows.map(r => Number(r.latency_p90_ms || 0));
+          const p95 = opRows.map(r => Number(r.latency_p95_ms || 0));
+          const p99 = opRows.map(r => Number(r.latency_p99_ms || 0));
+
+          const tpsId = "tps" + op.charAt(0).toUpperCase() + op.slice(1);
+          const latId = "lat" + op.charAt(0).toUpperCase() + op.slice(1);
+
+          if (charts[tpsId]) charts[tpsId].destroy();
+          if (charts[latId]) charts[latId].destroy();
+
+          charts[tpsId] = new Chart(document.getElementById(tpsId), {
+            type: "bar",
+            data: { labels, datasets: [{ label: "TPS", data: tps, backgroundColor: "#60a5fa" }] },
+            options: { responsive: true, scales: { y: { beginAtZero: true } } }
+          });
+
+          charts[latId] = new Chart(document.getElementById(latId), {
+            type: "line",
+            data: {
+              labels,
+              datasets: [
+                { label: "p90", data: p90, borderColor: "#34d399" },
+                { label: "p95", data: p95, borderColor: "#fbbf24" },
+                { label: "p99", data: p99, borderColor: "#f87171" }
+              ]
+            },
+            options: { responsive: true, scales: { y: { beginAtZero: true } } }
+          });
+        });
+      }
+
+      function drawTable(rows) {
+        const table = document.getElementById("dataTable");
+        if (!rows.length) {
+          table.innerHTML = "<tr><td>No data</td></tr>";
+          return;
+        }
+        const headers = Object.keys(rows[0]);
+        const head = "<tr>" + headers.map(h => `<th>${h}</th>`).join("") + "</tr>";
+        const body = rows.map(r =>
+          "<tr>" + headers.map(h => `<td>${r[h] || ""}</td>`).join("") + "</tr>"
+        ).join("");
+        table.innerHTML = head + body;
+      }
+
+      async function loadReport(runset, run) {
+        if (!run) return;
+        const res = await fetch(`/api/run/${runset}/${run}/report.csv`);
+        const csv = await res.text();
+        const rows = parseCsv(csv);
+        drawCharts(rows);
+        drawTable(rows);
+        await loadRunMeta(runset, run);
+      }
+
+      async function loadRunMeta(runset, run) {
+        const summary = await fetchJson(`/api/run/${runset}/${run}/summary`);
+        const schema = summary.schema || {};
+        const phases = (summary.phases || []).map(p => p.name).join(", ");
+        const schemaSql = (schema.schema_sql_file && schema.schema_sql_file.sql_file) || "";
+        const preloadSql = (schema.preload_sql_file && schema.preload_sql_file.sql_file) || "";
+        const runLabel = summary.run_label || inferLabelFromSummary(summary);
+        const runDesc = summary.run_description || "";
+        runMeta.innerHTML = `
+          <div>Run Label: <span class="mono">${runLabel}</span></div>
+          <div>Run Description: <span class="mono">${runDesc}</span></div>
+          <div>Schema SQL: <span class="mono">${schemaSql}</span></div>
+          <div>Preload SQL: <span class="mono">${preloadSql}</span></div>
+          <div>Phases: <span class="mono">${phases}</span></div>
+        `;
+      }
+
+      async function loadComparison() {
+        const runset = runSetSelect.value;
+        if (!runsCache.length) {
+          document.getElementById("compareTable").innerHTML = "<tr><td>No runs selected</td></tr>";
+          return;
+        }
+        const allRows = [];
+        const rowsByRun = {};
+        for (const run of runsCache) {
+          const res = await fetch(`/api/run/${runset}/${run}/report.csv`);
+          const csv = await res.text();
+          const rows = parseCsv(csv);
+          rowsByRun[run] = rows;
+          const pg = rows.filter(r => r.type === "pgbench");
+          const ops = ["select", "insert", "update", "delete"];
+          ops.forEach(op => {
+            const opRows = pg.filter(r => (r.operation || "").toLowerCase() === op);
+            if (!opRows.length) return;
+            const last = opRows.reduce((a, b) => {
+              const at = Number(a.target_tps || 0);
+              const bt = Number(b.target_tps || 0);
+              return bt >= at ? b : a;
+            });
+            allRows.push({
+              run: runLabelById[run] || run,
+              operation: op,
+              step: last.step,
+              target_tps: last.target_tps,
+              tps: last.tps,
+              p90: last.latency_p90_ms,
+              p95: last.latency_p95_ms,
+              p99: last.latency_p99_ms
+            });
+          });
+        }
+        drawCompareTable(allRows);
+        drawComparisonCharts(rowsByRun);
+      }
+
+      function drawCompareTable(rows) {
+        const table = document.getElementById("compareTable");
+        if (!rows.length) {
+          table.innerHTML = "<tr><td>No data</td></tr>";
+          return;
+        }
+        const headers = ["run", "operation", "step", "target_tps", "tps", "p90", "p95", "p99"];
+        const head = "<tr>" + headers.map(h => `<th>${h}</th>`).join("") + "</tr>";
+        const body = rows.map(r =>
+          "<tr>" + headers.map(h => `<td>${r[h] || ""}</td>`).join("") + "</tr>"
+        ).join("");
+        table.innerHTML = head + body;
+      }
+
+      function drawComparisonCharts(rowsByRun) {
+        summaryOpByTps.innerHTML = "";
+        summaryOpAcrossTps.innerHTML = "";
+        const ops = ["select", "insert", "update", "delete"];
+        const tpsLevels = [200, 400, 600];
+        const colors = ["#60a5fa", "#34d399", "#fbbf24", "#f87171"];
+
+        // Chart 1-12: per scenario, per TPS, compare ops (p95)
+        const grid1 = document.createElement("div");
+        grid1.className = "row";
+        grid1.style.gridTemplateColumns = "1fr 1fr";
+        grid1.style.gap = "16px";
+
+        runsCache.forEach((run, runIdx) => {
+          const label = runLabelById[run] || run;
+          const rows = rowsByRun[run] || [];
+          const pg = rows.filter(r => r.type === "pgbench");
+          tpsLevels.forEach((tps) => {
+            const panel = document.createElement("div");
+            panel.className = "panel";
+            const title = document.createElement("h3");
+            title.textContent = `${label} - ${tps} TPS (p95 by op)`;
+            const chartBox = document.createElement("div");
+            chartBox.className = "chart-box";
+            const canvas = document.createElement("canvas");
+            const chartId = `cmp_ops_${runIdx}_${tps}`;
+            canvas.id = chartId;
+            chartBox.appendChild(canvas);
+            panel.appendChild(title);
+            panel.appendChild(chartBox);
+            grid1.appendChild(panel);
+
+            const data = ops.map(op => {
+              const match = pg.find(r => (r.operation || "").toLowerCase() === op && Number(r.target_tps) === tps);
+              return Number(match ? match.latency_p95_ms : 0);
+            });
+            if (charts[chartId]) charts[chartId].destroy();
+            charts[chartId] = new Chart(canvas, {
+              type: "bar",
+              data: { labels: ops, datasets: [{ label: "p95 ms", data, backgroundColor: colors }] },
+              options: { responsive: true, scales: { y: { beginAtZero: true } } }
+            });
+          });
+        });
+
+        summaryOpByTps.appendChild(grid1);
+
+        // Chart 13-16: per scenario, ops across TPS (p95)
+        const grid2 = document.createElement("div");
+        grid2.className = "row";
+        grid2.style.gridTemplateColumns = "1fr 1fr";
+        grid2.style.gap = "16px";
+
+        runsCache.forEach((run, runIdx) => {
+          const label = runLabelById[run] || run;
+          const rows = rowsByRun[run] || [];
+          const pg = rows.filter(r => r.type === "pgbench");
+
+          const panel = document.createElement("div");
+          panel.className = "panel";
+          const title = document.createElement("h3");
+          title.textContent = `${label} - 200 vs 400 vs 600 TPS (p95 by op)`;
+          const chartBox = document.createElement("div");
+          chartBox.className = "chart-box";
+          const canvas = document.createElement("canvas");
+          const chartId = `cmp_tps_${runIdx}`;
+          canvas.id = chartId;
+          chartBox.appendChild(canvas);
+          panel.appendChild(title);
+          panel.appendChild(chartBox);
+          grid2.appendChild(panel);
+
+          const datasets = ops.map((op, i) => {
+            const data = tpsLevels.map(tps => {
+              const match = pg.find(r => (r.operation || "").toLowerCase() === op && Number(r.target_tps) === tps);
+              return Number(match ? match.latency_p95_ms : 0);
+            });
+            return { label: op, data, borderColor: colors[i], backgroundColor: colors[i] };
+          });
+          if (charts[chartId]) charts[chartId].destroy();
+          charts[chartId] = new Chart(canvas, {
+            type: "line",
+            data: { labels: tpsLevels.map(t => `${t}`), datasets },
+            options: { responsive: true, scales: { y: { beginAtZero: true } } }
+          });
+        });
+
+        summaryOpAcrossTps.appendChild(grid2);
+      }
+
+      function activateRun(runset, run) {
+        const activeRunset = runset || runSetSelect.value;
+        summaryView.style.display = "none";
+        runView.style.display = "block";
+        Array.from(document.querySelectorAll(".tab")).forEach(tab => tab.classList.remove("active"));
+        const target = Array.from(runTabs.querySelectorAll(".tab")).find(t => t.dataset.run === run);
+        if (target) target.classList.add("active");
+        loadReport(activeRunset, run);
+      }
+
+      function activateSummary() {
+        summaryView.style.display = "block";
+        runView.style.display = "none";
+        Array.from(document.querySelectorAll(".tab")).forEach(tab => tab.classList.remove("active"));
+        const summaryTab = document.querySelector('.tab[data-view="summary"]');
+        if (summaryTab) summaryTab.classList.add("active");
+        loadComparison();
+      }
+
+      refreshBtn.addEventListener("click", async () => {
+        await loadRunSets();
+        await loadRunsForRunset(runSetSelect.value);
+        await loadComparison();
+      });
+
+      runSetSelect.addEventListener("change", async () => {
+        await loadRunsForRunset(runSetSelect.value);
+        await loadComparison();
+      });
+      document.querySelector('.tab[data-view="summary"]').addEventListener("click", activateSummary);
+
+      (async function init() {
+        await loadRunSets();
+        await loadRunsForRunset(runSetSelect.value);
+        await loadComparison();
+        activateSummary();
+      })();
+    </script>
+  </body>
+</html>

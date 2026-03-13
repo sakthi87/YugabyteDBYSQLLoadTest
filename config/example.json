@@ -1,0 +1,54 @@
+{
+  "db": {
+    "host": "127.0.0.1",
+    "port": 5433,
+    "user": "yugabyte",
+    "password": "",
+    "dbname": "yb_load_test"
+  },
+  "schema": {
+    "create_db": true,
+    "drop_db": false,
+    "schema_sql_file": "scripts/schema.sql",
+    "preload_sql_file": "scripts/preload.sql"
+  },
+  "reports": {
+    "csv": true,
+    "html": true
+  },
+  "phases": [
+    {
+      "name": "insert_load",
+      "type": "pgbench",
+      "script": "scripts/pgbench/insert.sql",
+      "clients": 8,
+      "jobs": 2,
+      "duration_sec": 60,
+      "target_tps": 500
+    },
+    {
+      "name": "mixed_oltp",
+      "type": "pgbench",
+      "clients": 16,
+      "jobs": 4,
+      "log_transactions": true,
+      "mix": [
+        { "script": "scripts/pgbench/select.sql", "weight": 60 },
+        { "script": "scripts/pgbench/update.sql", "weight": 25 },
+        { "script": "scripts/pgbench/insert.sql", "weight": 10 },
+        { "script": "scripts/pgbench/delete.sql", "weight": 5 }
+      ],
+      "ramp": [
+        { "duration_sec": 60, "target_tps": 500 },
+        { "duration_sec": 60, "target_tps": 800 },
+        { "duration_sec": 120, "target_tps": 1200 }
+      ]
+    },
+    {
+      "name": "api_optional",
+      "type": "http",
+      "command": "jmeter",
+      "args": ["-n", "-t", "api_test.jmx", "-l", "results.jtl"]
+    }
+  ]
+}
