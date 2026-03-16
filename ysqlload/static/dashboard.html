@@ -55,6 +55,9 @@
         background: #111827;
         color: var(--text);
         cursor: pointer;
+        overflow-wrap: break-word;
+        white-space: normal;
+        word-break: break-word;
       }
       .tab.active {
         background: #1f2937;
@@ -141,62 +144,69 @@
       <div class="content">
         <div id="summaryView">
           <div class="panel">
-            <h3>Run Comparison (latest step per op)</h3>
-            <div class="muted">Shows latest step per operation across the 4 runs.</div>
-            <table id="compareTable" style="margin-top: 12px;"></table>
+            <h3>1. Schema Decision Table</h3>
+            <div class="muted">Single-glance summary: best schema, safe throughput, verdict. First element for quick decisions.</div>
+            <div id="schemaDecisionTable" style="margin-top: 12px; overflow-x: auto;"></div>
           </div>
           <div class="panel" style="margin-top: 20px;">
-            <h3>Operation Comparison at Each TPS (p95 ms)</h3>
-            <div class="muted">Compares SELECT/INSERT/UPDATE/DELETE for each scenario at 200/400/600 TPS.</div>
-            <div id="summaryOpByTps" style="margin-top: 12px;"></div>
+            <h3>2. Capacity vs Latency</h3>
+            <div class="muted">P95 latency vs target TPS. Identifies scaling behavior and knee point per schema.</div>
+            <div id="capacityVsLatency" class="chart-box" style="min-height: 280px;"></div>
           </div>
           <div class="panel" style="margin-top: 20px;">
-            <h3>Operation Trends Across TPS (p95 ms)</h3>
-            <div class="muted">For each scenario, shows how each operation changes from 200 → 400 → 600 TPS.</div>
-            <div id="summaryOpAcrossTps" style="margin-top: 12px;"></div>
+            <h3>3. Throughput Efficiency</h3>
+            <div class="muted">Achieved TPS / Target TPS. Detects early saturation or throttling.</div>
+            <div id="throughputEfficiency" class="chart-box" style="min-height: 260px;"></div>
+          </div>
+          <div class="panel" style="margin-top: 20px;">
+            <h3>4. Operation Latency Comparison</h3>
+            <div class="muted">P95 latency by operation at highest TPS. Which operations are affected most by schema.</div>
+            <div id="operationLatencyComparison" class="chart-box" style="min-height: 280px;"></div>
+          </div>
+          <div class="panel" style="margin-top: 20px;">
+            <h3>5. Client vs Server Latency Breakdown</h3>
+            <div class="muted">Stacked: server latency + overhead. Database vs client/network bottleneck.</div>
+            <div id="clientServerBreakdown" class="chart-box" style="min-height: 260px;"></div>
           </div>
         </div>
         <div id="runView" style="display: none;">
-          <div class="row">
-        <div class="panel">
-          <h3>TPS - SELECT</h3>
-          <div class="chart-box"><canvas id="tpsSelect"></canvas></div>
-        </div>
-        <div class="panel">
-          <h3>TPS - INSERT</h3>
-          <div class="chart-box"><canvas id="tpsInsert"></canvas></div>
-        </div>
-      </div>
-      <div class="row" style="margin-top: 20px;">
-        <div class="panel">
-          <h3>TPS - UPDATE</h3>
-          <div class="chart-box"><canvas id="tpsUpdate"></canvas></div>
-        </div>
-        <div class="panel">
-          <h3>TPS - DELETE</h3>
-          <div class="chart-box"><canvas id="tpsDelete"></canvas></div>
-        </div>
-      </div>
-      <div class="row" style="margin-top: 20px;">
-        <div class="panel">
-          <h3>Latency p90/p95/p99 (ms) - SELECT</h3>
-          <div class="chart-box"><canvas id="latSelect"></canvas></div>
-        </div>
-        <div class="panel">
-          <h3>Latency p90/p95/p99 (ms) - INSERT</h3>
-          <div class="chart-box"><canvas id="latInsert"></canvas></div>
-        </div>
-      </div>
-      <div class="row" style="margin-top: 20px;">
-        <div class="panel">
-          <h3>Latency p90/p95/p99 (ms) - UPDATE</h3>
-          <div class="chart-box"><canvas id="latUpdate"></canvas></div>
-        </div>
-        <div class="panel">
-          <h3>Latency p90/p95/p99 (ms) - DELETE</h3>
-          <div class="chart-box"><canvas id="latDelete"></canvas></div>
-        </div>
-      </div>
+          <div class="panel">
+            <h3>TPS - SELECT / INSERT / UPDATE / DELETE</h3>
+            <div class="muted" style="margin-bottom: 8px;">All operations in one chart. Grouped by target TPS level.</div>
+            <div class="chart-box"><canvas id="tpsCombined"></canvas></div>
+          </div>
+          <div class="panel" style="margin-top: 20px;">
+            <h3>Latency p90/p95/p99 (ms) - SELECT / INSERT / UPDATE / DELETE (Pgbench)</h3>
+            <div class="muted" style="margin-bottom: 8px;">Client-side: pgbench round-trip latency. All operations in one chart.</div>
+            <div class="chart-box"><canvas id="latCombined"></canvas></div>
+          </div>
+          <div class="panel" style="margin-top: 20px;">
+            <h3>Server P50/P90/P95/P99 (yb_latency_histogram)</h3>
+            <div class="muted" style="margin-bottom: 8px;">Server-side (YugabyteDB): percentiles from pg_stat_statements.yb_latency_histogram.</div>
+            <div id="ybPercentiles" class="chart-box" style="min-height: 180px;"></div>
+          </div>
+          <div class="panel" style="margin-top: 20px;">
+            <h3>Latency Breakdown (client vs server)</h3>
+            <div class="muted" style="margin-bottom: 8px;">P95 vs P95 (same as above charts). Client P95 − Server P95 = overhead (network + connection).</div>
+            <div id="latencyBreakdown" class="chart-box" style="min-height: 180px;"></div>
+          </div>
+          <div class="panel" style="margin-top: 20px;">
+            <h3>Connection Count (clients) by Step</h3>
+            <div class="muted" style="margin-bottom: 8px;">pgbench clients per step (≈ DB connections when connecting directly).</div>
+            <div id="clientsChart" class="chart-box" style="min-height: 180px;"></div>
+          </div>
+          <div class="panel" style="margin-top: 20px;">
+            <h3>Latency Over Time (pg_stat, every 5 sec)</h3>
+            <div class="muted" style="margin-bottom: 8px;">Server-side latency change during run. Enable pg_stat_statements_interval_sec in config.</div>
+            <select id="pgStatOverTimeStep" style="margin-bottom: 8px;"></select>
+            <div id="pgStatOverTime" class="chart-box" style="min-height: 200px;"></div>
+          </div>
+          <div id="replicationPanel" class="panel" style="margin-top: 20px; display: none;">
+            <h3>Replication Lag Over Time (XCluster)</h3>
+            <div class="muted" style="margin-bottom: 8px;">Replication lag during load. Shown only for XCluster runs.</div>
+            <select id="replicationStepSelect" style="margin-bottom: 8px;"></select>
+            <div id="replicationOverTime" class="chart-box" style="min-height: 200px;"></div>
+          </div>
           <div class="panel" style="margin-top: 20px;">
             <h3>Run Metadata</h3>
             <div id="runMeta" class="muted"></div>
@@ -215,11 +225,17 @@
       const runTabs = document.getElementById("runTabs");
       const summaryView = document.getElementById("summaryView");
       const runView = document.getElementById("runView");
-      const summaryOpByTps = document.getElementById("summaryOpByTps");
-      const summaryOpAcrossTps = document.getElementById("summaryOpAcrossTps");
+      const schemaDecisionTable = document.getElementById("schemaDecisionTable");
+      const capacityVsLatency = document.getElementById("capacityVsLatency");
+      const throughputEfficiency = document.getElementById("throughputEfficiency");
+      const operationLatencyComparison = document.getElementById("operationLatencyComparison");
+      const clientServerBreakdown = document.getElementById("clientServerBreakdown");
       const charts = {};
       let runsCache = [];
       let runLabelById = {};
+      let schemaById = {};
+      let currentRunset = "";
+      let currentRun = "";
 
       async function fetchJson(url) {
         const res = await fetch(url);
@@ -227,12 +243,12 @@
       }
 
       function parseCsv(text) {
-        const lines = text.trim().split("\n");
-        const headers = lines[0].split(",");
+        const lines = text.trim().replace(/\r\n/g, "\n").replace(/\r/g, "\n").split("\n");
+        const headers = lines[0].split(",").map(h => h.trim());
         const rows = lines.slice(1).map(line => {
           const cols = line.split(",");
           const obj = {};
-          headers.forEach((h, i) => obj[h] = cols[i] || "");
+          headers.forEach((h, i) => obj[h] = (cols[i] || "").trim());
           return obj;
         });
         return rows;
@@ -240,18 +256,43 @@
 
       function inferLabelFromSummary(summary) {
         const schema = summary && summary.schema && summary.schema.schema_sql_file;
-        const sqlFile = schema && schema.sql_file ? schema.sql_file : "";
-        if (sqlFile.includes("schema_plain.sql")) return "plain_no_index_no_fk";
-        if (sqlFile.includes("schema_index.sql")) return "index_no_fk";
-        if (sqlFile.includes("schema_fk.sql")) return "fk_no_index";
-        if (sqlFile.includes("schema_index_fk.sql")) return "index_and_fk";
+        const sqlFile = (schema && schema.sql_file ? schema.sql_file : "").toString();
+        if (sqlFile.includes("schema_plain.sql")) return "plain";
+        if (sqlFile.includes("schema_index.sql")) return "index";
+        if (sqlFile.includes("schema_fk.sql")) return "fk";
+        if (sqlFile.includes("schema_index_fk.sql")) return "index_fk";
         return "";
+      }
+
+      function inferSchemaFromLabel(label) {
+        const s = (label || "").toLowerCase().replace(/\s+/g, "_");
+        if (s.startsWith("index_fk") || s.includes("index_fk")) return "index_fk";
+        if (s.startsWith("index")) return "index";
+        if (s.startsWith("fk")) return "fk";
+        return "plain";
+      }
+
+      const SCHEMA_ORDER = ["plain", "index", "fk", "index_fk"];
+
+      function formatRunLabel(name, label) {
+        if (label && label.trim()) {
+          return label.trim().replace(/_/g, " ");
+        }
+        const shortTime = name && name.length >= 12 ? name.slice(9, 15) : name;
+        return shortTime ? `Run ${shortTime}` : name;
       }
 
       async function loadRunSets() {
         const runsets = await fetchJson("/api/runsets");
         runSetSelect.innerHTML = "";
         const sorted = runsets.runsets.slice().sort();
+        if (!sorted.length) {
+          const opt = document.createElement("option");
+          opt.value = "";
+          opt.textContent = "No run sets with 4 runs found";
+          runSetSelect.appendChild(opt);
+          return;
+        }
         sorted.forEach(name => {
           const opt = document.createElement("option");
           opt.value = name;
@@ -264,69 +305,330 @@
       }
 
       async function loadRunsForRunset(runset) {
-        const runs = await fetchJson(`/api/runset/${runset}/runs`);
         runTabs.innerHTML = "";
         runLabelById = {};
-        runsCache = runs.runs.slice().sort();
-        for (const name of runsCache) {
-          let label = "";
-          try {
-            const summary = await fetchJson(`/api/run/${runset}/${name}/summary`);
-            label = summary.run_label || inferLabelFromSummary(summary);
-          } catch (_) {
-            label = "";
+        let labels = {};
+        try {
+          const data = await fetchJson(`/api/runset/${encodeURIComponent(runset)}/runs_with_labels`);
+          runsCache = (data.runs || []).slice().sort();
+          labels = data.labels || {};
+        } catch (_) {
+          const runs = await fetchJson(`/api/runset/${encodeURIComponent(runset)}/runs`);
+          runsCache = (runs.runs || []).slice().sort();
+          for (const name of runsCache) {
+            try {
+              const s = await fetchJsonOrSanitized(`/api/run/${encodeURIComponent(runset)}/${encodeURIComponent(name)}/summary`);
+              labels[name] = (s.run_label || inferLabelFromSummary(s) || "").toString().trim();
+            } catch (_) {
+              labels[name] = "";
+            }
           }
-          runLabelById[name] = label || name;
+        }
+        runsCache.forEach((name) => {
+          const label = (labels[name] || "").toString().trim();
+          const displayLabel = formatRunLabel(name, label);
+          runLabelById[name] = displayLabel || name;
+          schemaById[name] = inferSchemaFromLabel(label);
           const tab = document.createElement("button");
           tab.className = "tab";
           tab.dataset.view = "run";
           tab.dataset.run = name;
-          tab.textContent = label ? `${name} | ${label}` : name;
+          tab.textContent = displayLabel || name;
+          tab.title = (label || name) + (name ? ` (${name})` : "");
           tab.addEventListener("click", () => activateRun(runset, name));
           runTabs.appendChild(tab);
-        }
+        });
         const firstRun = runsCache[runsCache.length - 1];
         if (firstRun) {
           activateRun(runset, firstRun);
         }
       }
 
-      function drawCharts(rows) {
-        const pg = rows.filter(r => r.type === "pgbench");
-        const ops = ["select", "insert", "update", "delete"];
-        ops.forEach(op => {
-          const opRows = pg.filter(r => (r.operation || "").toLowerCase() === op);
-          const labels = opRows.map(r => r.step || r.phase);
-          const tps = opRows.map(r => Number(r.tps || 0));
-          const p90 = opRows.map(r => Number(r.latency_p90_ms || 0));
-          const p95 = opRows.map(r => Number(r.latency_p95_ms || 0));
-          const p99 = opRows.map(r => Number(r.latency_p99_ms || 0));
-
-          const tpsId = "tps" + op.charAt(0).toUpperCase() + op.slice(1);
-          const latId = "lat" + op.charAt(0).toUpperCase() + op.slice(1);
-
-          if (charts[tpsId]) charts[tpsId].destroy();
-          if (charts[latId]) charts[latId].destroy();
-
-          charts[tpsId] = new Chart(document.getElementById(tpsId), {
-            type: "bar",
-            data: { labels, datasets: [{ label: "TPS", data: tps, backgroundColor: "#60a5fa" }] },
-            options: { responsive: true, scales: { y: { beginAtZero: true } } }
+      async function loadPgStatOverTime(runset, run) {
+        const stepSelect = document.getElementById("pgStatOverTimeStep");
+        const container = document.getElementById("pgStatOverTime");
+        stepSelect.innerHTML = "";
+        container.innerHTML = "";
+        if (!runset || !run) return;
+        try {
+          const summary = await fetchJsonOrSanitized(`/api/run/${runset}/${run}/summary`);
+          const stepsWithData = [];
+          for (const phase of summary.phases || []) {
+            for (const step of phase.steps || []) {
+              if (step.pg_stat_statements_over_time) {
+                stepsWithData.push({ step: step.step, name: step.step || step.name });
+              }
+            }
+          }
+          if (!stepsWithData.length) {
+            container.innerHTML = "<div class=\"muted\">No latency-over-time data. Set pg_stat_statements_interval_sec: 5 in config.</div>";
+            return;
+          }
+          stepsWithData.forEach(s => {
+            const opt = document.createElement("option");
+            opt.value = s.step;
+            opt.textContent = s.step;
+            stepSelect.appendChild(opt);
           });
+          currentRunset = runset;
+          currentRun = run;
+          stepSelect.onchange = () => drawPgStatOverTime(currentRunset, currentRun, stepSelect.value);
+          await drawPgStatOverTime(runset, run, stepsWithData[0].step);
+        } catch (_) {
+          container.innerHTML = "<div class=\"muted\">Could not load latency-over-time data.</div>";
+        }
+      }
 
-          charts[latId] = new Chart(document.getElementById(latId), {
+      function safeNum(v) {
+        if (v == null || v === "") return null;
+        const n = typeof v === "number" ? v : Number(v);
+        return (typeof n === "number" && isFinite(n)) ? n : null;
+      }
+
+      async function fetchJsonOrSanitized(url) {
+        const res = await fetch(url);
+        const text = await res.text();
+        try {
+          return JSON.parse(text);
+        } catch (_) {
+          const sanitized = text.replace(/-Infinity/g, "null").replace(/Infinity/g, "null").replace(/NaN/g, "null");
+          return JSON.parse(sanitized);
+        }
+      }
+
+      async function drawPgStatOverTime(runset, run, stepName) {
+        const container = document.getElementById("pgStatOverTime");
+        if (!stepName) return;
+        try {
+          const data = await fetchJsonOrSanitized(`/api/run/${runset}/${run}/step/${stepName}/pg_stat_over_time`);
+          const snapshots = data.snapshots || [];
+          if (!snapshots.length) {
+            container.innerHTML = "<div class=\"muted\">No snapshots.</div>";
+            return;
+          }
+          const labels = snapshots.map(s => s.elapsed_sec + "s");
+          const mean = snapshots.map(s => safeNum(s.mean_ms));
+          const p50 = snapshots.map(s => safeNum(s.yb_p50_ms));
+          const p90 = snapshots.map(s => safeNum(s.yb_p90_ms));
+          const p95 = snapshots.map(s => safeNum(s.yb_p95_ms));
+          const p99 = snapshots.map(s => safeNum(s.yb_p99_ms));
+          if (charts.pgStatOverTime) charts.pgStatOverTime.destroy();
+          const canvas = document.createElement("canvas");
+          container.innerHTML = "";
+          container.appendChild(canvas);
+          const hasPct = p99.some(v => v != null);
+          charts.pgStatOverTime = new Chart(canvas, {
             type: "line",
             data: {
               labels,
-              datasets: [
-                { label: "p90", data: p90, borderColor: "#34d399" },
-                { label: "p95", data: p95, borderColor: "#fbbf24" },
-                { label: "p99", data: p99, borderColor: "#f87171" }
-              ]
+              datasets: hasPct
+                ? [
+                    { label: "mean ms", data: mean, borderColor: "#60a5fa" },
+                    { label: "P50 ms", data: p50, borderColor: "#34d399" },
+                    { label: "P90 ms", data: p90, borderColor: "#fbbf24" },
+                    { label: "P95 ms", data: p95, borderColor: "#f87171" },
+                    { label: "P99 ms", data: p99, borderColor: "#a78bfa" }
+                  ]
+                : [{ label: "mean ms", data: mean, borderColor: "#60a5fa" }]
             },
-            options: { responsive: true, scales: { y: { beginAtZero: true } } }
+            options: {
+              responsive: true,
+              scales: {
+                x: { title: { display: true, text: "Elapsed (sec)" } },
+                y: { beginAtZero: true, title: { display: true, text: "Latency (ms)" } }
+              }
+            }
           });
+        } catch (_) {
+          container.innerHTML = "<div class=\"muted\">Failed to load step data.</div>";
+        }
+      }
+
+      function drawYbPercentiles(rows) {
+        const pg = rows.filter(r => {
+          if (r.type !== "pgbench") return false;
+          const v = Number(r.yb_p99_ms);
+          return r.yb_p99_ms != null && r.yb_p99_ms !== "" && isFinite(v) && v >= 0;
         });
+        const container = document.getElementById("ybPercentiles");
+        if (!pg.length) {
+          container.innerHTML = "<div class=\"muted\">No yb_latency_histogram data. Requires YugabyteDB 2.18.1+.</div>";
+          return;
+        }
+        const labels = pg.map(r => (r.step || r.phase || ""));
+        const p50 = pg.map(r => safeNum(r.yb_p50_ms) ?? 0);
+        const p90 = pg.map(r => safeNum(r.yb_p90_ms) ?? 0);
+        const p95 = pg.map(r => safeNum(r.yb_p95_ms) ?? 0);
+        const p99 = pg.map(r => safeNum(r.yb_p99_ms) ?? 0);
+        if (charts.ybPercentiles) charts.ybPercentiles.destroy();
+        const canvas = document.createElement("canvas");
+        container.innerHTML = "";
+        container.appendChild(canvas);
+        charts.ybPercentiles = new Chart(canvas, {
+          type: "line",
+          data: {
+            labels,
+            datasets: [
+              { label: "P50 (ms)", data: p50, borderColor: "#60a5fa" },
+              { label: "P90 (ms)", data: p90, borderColor: "#34d399" },
+              { label: "P95 (ms)", data: p95, borderColor: "#fbbf24" },
+              { label: "P99 (ms)", data: p99, borderColor: "#f87171" }
+            ]
+          },
+          options: {
+            responsive: true,
+            scales: {
+              y: { beginAtZero: true, title: { display: true, text: "Latency (ms)" } }
+            }
+          }
+        });
+      }
+
+      function drawLatencyBreakdown(rows) {
+        const pg = rows.filter(r => {
+          if (r.type !== "pgbench") return false;
+          const c = safeNum(r.latency_p95_ms);
+          const s = safeNum(r.yb_p95_ms);
+          return c != null && s != null;
+        });
+        const container = document.getElementById("latencyBreakdown");
+        if (!pg.length) {
+          container.innerHTML = "<div class=\"muted\">No p95 data. Enable server_metrics.pg_stat_statements and yb_latency_histogram (YugabyteDB 2.18.1+).</div>";
+          return;
+        }
+        const labels = pg.map(r => (r.step || r.phase || ""));
+        const client = pg.map(r => safeNum(r.latency_p95_ms) ?? 0);
+        const server = pg.map(r => safeNum(r.yb_p95_ms) ?? 0);
+        const overhead = pg.map(r => Math.max(0, (safeNum(r.latency_p95_ms) ?? 0) - (safeNum(r.yb_p95_ms) ?? 0)));
+        if (charts.latencyBreakdown) charts.latencyBreakdown.destroy();
+        const canvas = document.createElement("canvas");
+        container.innerHTML = "";
+        container.appendChild(canvas);
+        charts.latencyBreakdown = new Chart(canvas, {
+          type: "bar",
+          data: {
+            labels,
+            datasets: [
+              { label: "Client P95 (pgbench) ms", data: client, backgroundColor: "#60a5fa" },
+              { label: "Server P95 (yb) ms", data: server, backgroundColor: "#34d399" },
+              { label: "Overhead ms", data: overhead, backgroundColor: "#fbbf24" }
+            ]
+          },
+          options: {
+            responsive: true,
+            scales: {
+              x: { stacked: false },
+              y: { beginAtZero: true, title: { display: true, text: "Latency (ms)" } }
+            }
+          }
+        });
+      }
+
+      function drawClientsChart(rows) {
+        const pg = rows.filter(r => r.type === "pgbench");
+        const container = document.getElementById("clientsChart");
+        if (!pg.length) {
+          container.innerHTML = "<div class=\"muted\">No pgbench data.</div>";
+          return;
+        }
+        const labels = pg.map(r => (r.step || r.phase || r.operation || ""));
+        const clients = pg.map(r => safeNum(r.clients) ?? 0);
+        if (charts.clientsChart) charts.clientsChart.destroy();
+        const canvas = document.createElement("canvas");
+        container.innerHTML = "";
+        container.appendChild(canvas);
+        charts.clientsChart = new Chart(canvas, {
+          type: "bar",
+          data: {
+            labels,
+            datasets: [{ label: "Clients (connections)", data: clients, backgroundColor: "#60a5fa" }]
+          },
+          options: {
+            responsive: true,
+            scales: {
+              x: { title: { display: true, text: "Step" } },
+              y: { beginAtZero: true, title: { display: true, text: "Clients" } }
+            }
+          }
+        });
+      }
+
+      function drawCharts(rows) {
+        const pg = rows.filter(r => r.type === "pgbench");
+        const ops = ["select", "insert", "update", "delete"];
+        const opColors = ["#60a5fa", "#34d399", "#fbbf24", "#f87171"];
+
+        // Combined TPS chart: all 4 operations in one, grouped by target TPS
+        const tpsLevels = [...new Set(pg.map(r => safeNum(r.target_tps) ?? 0).filter(v => v > 0))].sort((a, b) => a - b);
+        const labels = tpsLevels.length ? tpsLevels.map(t => `${t} TPS`) : ["Step"];
+        const datasets = ops.map((op, i) => {
+          const opRows = pg.filter(r => (r.operation || "").toLowerCase() === op);
+          const data = tpsLevels.map(t => {
+            const match = opRows.find(r => (safeNum(r.target_tps) ?? 0) === t);
+            return match ? (safeNum(match.tps) ?? null) : null;
+          });
+          return { label: op.toUpperCase(), data, backgroundColor: opColors[i] };
+        });
+        if (tpsLevels.length === 0) {
+          const stepLabels = [...new Set(pg.map(r => r.step || r.phase).filter(Boolean))];
+          labels.length = 0;
+          labels.push(...stepLabels);
+          datasets.length = 0;
+          ops.forEach((op, i) => {
+            const opRows = pg.filter(r => (r.operation || "").toLowerCase() === op);
+            const data = stepLabels.map(l => {
+              const m = opRows.find(r => (r.step || r.phase) === l);
+              return m ? (safeNum(m.tps) ?? null) : null;
+            });
+            datasets.push({ label: op.toUpperCase(), data, backgroundColor: opColors[i] });
+          });
+        }
+
+        ["tpsSelect", "tpsInsert", "tpsUpdate", "tpsDelete"].forEach(id => {
+          if (charts[id]) { charts[id].destroy(); charts[id] = null; }
+        });
+        if (charts.tpsCombined) charts.tpsCombined.destroy();
+        charts.tpsCombined = new Chart(document.getElementById("tpsCombined"), {
+          type: "bar",
+          data: { labels, datasets },
+          options: {
+            responsive: true,
+            scales: {
+              y: { beginAtZero: true, title: { display: true, text: "TPS" } },
+              x: { title: { display: true, text: "Target TPS / Step" } }
+            }
+          }
+        });
+
+        // Combined latency chart: P50, P90, P95, P99 (matches Latency Breakdown which uses P95)
+        const stepLabels = pg.map(r => (r.step || r.phase || ""));
+        const p50 = pg.map(r => safeNum(r.latency_p50_ms) ?? 0);
+        const p90 = pg.map(r => safeNum(r.latency_p90_ms) ?? 0);
+        const p95 = pg.map(r => safeNum(r.latency_p95_ms) ?? 0);
+        const p99 = pg.map(r => safeNum(r.latency_p99_ms) ?? 0);
+        const latDatasets = [
+          { label: "P50 (ms)", data: p50, borderColor: "#60a5fa", backgroundColor: "#60a5fa", fill: false },
+          { label: "P90 (ms)", data: p90, borderColor: "#34d399", backgroundColor: "#34d399", fill: false },
+          { label: "P95 (ms)", data: p95, borderColor: "#fbbf24", backgroundColor: "#fbbf24", fill: false },
+          { label: "P99 (ms)", data: p99, borderColor: "#f87171", backgroundColor: "#f87171", fill: false }
+        ];
+        ["latSelect", "latInsert", "latUpdate", "latDelete"].forEach(id => {
+          if (charts[id]) { charts[id].destroy(); charts[id] = null; }
+        });
+        if (charts.latCombined) charts.latCombined.destroy();
+        const latEl = document.getElementById("latCombined");
+        if (latEl && latDatasets.length && stepLabels.length) {
+          charts.latCombined = new Chart(latEl, {
+            type: "line",
+            data: { labels: stepLabels, datasets: latDatasets },
+            options: {
+              responsive: true,
+              scales: {
+                y: { beginAtZero: true, title: { display: true, text: "Latency (ms)" } }
+              }
+            }
+          });
+        }
       }
 
       function drawTable(rows) {
@@ -349,168 +651,397 @@
         const csv = await res.text();
         const rows = parseCsv(csv);
         drawCharts(rows);
+        drawLatencyBreakdown(rows);
+        drawClientsChart(rows);
+        drawYbPercentiles(rows);
         drawTable(rows);
-        await loadRunMeta(runset, run);
+        const summary = await fetchJsonOrSanitized(`/api/run/${runset}/${run}/summary`);
+        await loadRunMeta(summary);
+        await loadPgStatOverTime(runset, run);
+        if (summary && summary.xcluster_enabled) {
+          document.getElementById("replicationPanel").style.display = "block";
+          await loadReplicationOverTime(runset, run);
+        } else {
+          document.getElementById("replicationPanel").style.display = "none";
+        }
       }
 
-      async function loadRunMeta(runset, run) {
-        const summary = await fetchJson(`/api/run/${runset}/${run}/summary`);
+      async function loadRunMeta(summary) {
+        if (!summary) return;
         const schema = summary.schema || {};
         const phases = (summary.phases || []).map(p => p.name).join(", ");
         const schemaSql = (schema.schema_sql_file && schema.schema_sql_file.sql_file) || "";
         const preloadSql = (schema.preload_sql_file && schema.preload_sql_file.sql_file) || "";
         const runLabel = summary.run_label || inferLabelFromSummary(summary);
         const runDesc = summary.run_description || "";
+        const clusterType = summary.cluster_type || "stretch";
+        const clusterTopology = summary.cluster_topology || "";
         runMeta.innerHTML = `
           <div>Run Label: <span class="mono">${runLabel}</span></div>
           <div>Run Description: <span class="mono">${runDesc}</span></div>
+          <div>Cluster: <span class="mono">${clusterType}</span>${clusterTopology ? ` (${clusterTopology})` : ""}</div>
           <div>Schema SQL: <span class="mono">${schemaSql}</span></div>
           <div>Preload SQL: <span class="mono">${preloadSql}</span></div>
           <div>Phases: <span class="mono">${phases}</span></div>
         `;
       }
 
+      async function loadReplicationOverTime(runset, run) {
+        const stepSelect = document.getElementById("replicationStepSelect");
+        const container = document.getElementById("replicationOverTime");
+        stepSelect.innerHTML = "";
+        container.innerHTML = "";
+        if (!runset || !run) return;
+        try {
+          const summary = await fetchJsonOrSanitized(`/api/run/${runset}/${run}/summary`);
+          const stepsWithData = [];
+          for (const phase of summary.phases || []) {
+            for (const step of phase.steps || []) {
+              if (step.replication_lag_over_time) stepsWithData.push({ step: step.step });
+            }
+          }
+          if (!stepsWithData.length) {
+            container.innerHTML = "<div class=\"muted\">No replication lag data.</div>";
+            return;
+          }
+          stepsWithData.forEach(s => {
+            const opt = document.createElement("option");
+            opt.value = s.step;
+            opt.textContent = s.step;
+            stepSelect.appendChild(opt);
+          });
+          stepSelect.onchange = () => drawReplicationOverTime(runset, run, stepSelect.value);
+          await drawReplicationOverTime(runset, run, stepsWithData[0].step);
+        } catch (_) {
+          container.innerHTML = "<div class=\"muted\">Could not load replication data.</div>";
+        }
+      }
+
+      async function drawReplicationOverTime(runset, run, stepName) {
+        const container = document.getElementById("replicationOverTime");
+        if (!stepName) return;
+        try {
+          const data = await fetchJsonOrSanitized(`/api/run/${runset}/${run}/step/${stepName}/replication_lag_over_time`);
+          const snapshots = data.snapshots || [];
+          if (!snapshots.length) {
+            container.innerHTML = "<div class=\"muted\">No snapshots.</div>";
+            return;
+          }
+          const labels = snapshots.map(s => s.elapsed_sec + "s");
+          const lag = snapshots.map(s => safeNum(s.lag_ms));
+          if (charts.replicationOverTime) charts.replicationOverTime.destroy();
+          const canvas = document.createElement("canvas");
+          container.innerHTML = "";
+          container.appendChild(canvas);
+          charts.replicationOverTime = new Chart(canvas, {
+            type: "line",
+            data: {
+              labels,
+              datasets: [{ label: "Replication Lag (ms)", data: lag, borderColor: "#a78bfa" }]
+            },
+            options: {
+              responsive: true,
+              scales: {
+                x: { title: { display: true, text: "Elapsed (sec)" } },
+                y: { beginAtZero: true, title: { display: true, text: "Lag (ms)" } }
+              }
+            }
+          });
+        } catch (_) {
+          container.innerHTML = "<div class=\"muted\">Failed to load replication data.</div>";
+        }
+      }
+
       async function loadComparison() {
         const runset = runSetSelect.value;
         if (!runsCache.length) {
-          document.getElementById("compareTable").innerHTML = "<tr><td>No runs selected</td></tr>";
+          schemaDecisionTable.innerHTML = "<div class=\"muted\">No runs selected.</div>";
           return;
         }
-        const allRows = [];
         const rowsByRun = {};
         for (const run of runsCache) {
-          const res = await fetch(`/api/run/${runset}/${run}/report.csv`);
-          const csv = await res.text();
-          const rows = parseCsv(csv);
-          rowsByRun[run] = rows;
-          const pg = rows.filter(r => r.type === "pgbench");
-          const ops = ["select", "insert", "update", "delete"];
-          ops.forEach(op => {
-            const opRows = pg.filter(r => (r.operation || "").toLowerCase() === op);
-            if (!opRows.length) return;
-            const last = opRows.reduce((a, b) => {
-              const at = Number(a.target_tps || 0);
-              const bt = Number(b.target_tps || 0);
-              return bt >= at ? b : a;
-            });
-            allRows.push({
-              run: runLabelById[run] || run,
-              operation: op,
-              step: last.step,
-              target_tps: last.target_tps,
-              tps: last.tps,
-              p90: last.latency_p90_ms,
-              p95: last.latency_p95_ms,
-              p99: last.latency_p99_ms
-            });
-          });
+          try {
+            const res = await fetch(`/api/run/${runset}/${run}/report.csv`);
+            const csv = await res.text();
+            rowsByRun[run] = parseCsv(csv);
+          } catch (_) {
+            rowsByRun[run] = [];
+          }
         }
-        drawCompareTable(allRows);
-        drawComparisonCharts(rowsByRun);
+        drawSummaryComponents(rowsByRun);
       }
 
-      function drawCompareTable(rows) {
-        const table = document.getElementById("compareTable");
-        if (!rows.length) {
-          table.innerHTML = "<tr><td>No data</td></tr>";
-          return;
-        }
-        const headers = ["run", "operation", "step", "target_tps", "tps", "p90", "p95", "p99"];
-        const head = "<tr>" + headers.map(h => `<th>${h}</th>`).join("") + "</tr>";
-        const body = rows.map(r =>
-          "<tr>" + headers.map(h => `<td>${r[h] || ""}</td>`).join("") + "</tr>"
-        ).join("");
-        table.innerHTML = head + body;
-      }
-
-      function drawComparisonCharts(rowsByRun) {
-        summaryOpByTps.innerHTML = "";
-        summaryOpAcrossTps.innerHTML = "";
+      function getRunAggregates(rows) {
+        const pg = (rows || []).filter(r => r.type === "pgbench");
         const ops = ["select", "insert", "update", "delete"];
-        const tpsLevels = [200, 400, 600];
+        const tpsSet = new Set();
+        pg.forEach(r => {
+          const t = safeNum(r.target_tps) ?? 0;
+          if (t > 0) tpsSet.add(t);
+        });
+        const tpsLevels = [...tpsSet].sort((a, b) => a - b);
+        const minTps = tpsLevels[0] || 0;
+        const byTps = {};
+        tpsLevels.forEach(t => {
+          const atTps = pg.filter(r => (safeNum(r.target_tps) ?? 0) === t);
+          const p95Vals = atTps.map(r => safeNum(r.latency_p95_ms)).filter(v => v != null);
+          const tpsVals = atTps.map(r => safeNum(r.tps)).filter(v => v != null);
+          const effVals = atTps.map(r => {
+            const achieved = safeNum(r.tps) ?? 0;
+            const target = safeNum(r.target_tps) ?? 0;
+            return target > 0 ? achieved / target : 0;
+          });
+          byTps[t] = {
+            p95Avg: p95Vals.length ? p95Vals.reduce((a, b) => a + b, 0) / p95Vals.length : null,
+            tpsAvg: tpsVals.length ? tpsVals.reduce((a, b) => a + b, 0) / tpsVals.length : null,
+            effMin: effVals.length ? Math.min(...effVals) : null
+          };
+        });
+        let maxStableTps = null;
+        for (let i = tpsLevels.length - 1; i >= 0; i--) {
+          const t = tpsLevels[i];
+          const d = byTps[t];
+          const p95Low = byTps[minTps] && byTps[minTps].p95Avg;
+          const latencyGrowth = (p95Low && d.p95Avg && p95Low > 0) ? d.p95Avg / p95Low : null;
+          const ok = (latencyGrowth == null || latencyGrowth <= 2) && (d.effMin != null && d.effMin >= 0.85);
+          if (ok) { maxStableTps = t; break; }
+        }
+        const maxTps = tpsLevels[tpsLevels.length - 1] || null;
+        const atMax = maxTps ? byTps[maxTps] : null;
+        const p95AtLowest = tpsLevels[0] && byTps[tpsLevels[0]] ? byTps[tpsLevels[0]].p95Avg : null;
+        const p95AtHighest = maxTps && byTps[maxTps] ? byTps[maxTps].p95Avg : null;
+        const p95At200 = byTps[200] ? byTps[200].p95Avg : null;
+        const p95At400 = byTps[400] ? byTps[400].p95Avg : null;
+        const p95At600 = byTps[600] ? byTps[600].p95Avg : null;
+        const latencyGrowth = (p95AtLowest && p95AtHighest && p95AtLowest > 0) ? p95AtHighest / p95AtLowest : null;
+        const efficiency = atMax && maxTps && maxTps > 0 ? atMax.effMin : null;
+        let verdict = "—";
+        if (efficiency != null && latencyGrowth != null) {
+          if (latencyGrowth <= 1.5 && efficiency >= 0.9) verdict = "Best";
+          else if (latencyGrowth <= 2.0 && efficiency >= 0.8) verdict = "Acceptable";
+          else if (latencyGrowth > 2.0) verdict = "Risky";
+          else if (efficiency < 0.7) verdict = "Poor";
+          else verdict = "—";
+        }
+        return {
+          tpsLevels,
+          minTps,
+          byTps,
+          maxStableTps,
+          maxTps,
+          atMax,
+          p95At200,
+          p95At400,
+          p95At600,
+          latencyGrowth,
+          efficiency,
+          verdict,
+          pg,
+          ops
+        };
+      }
+
+      function drawSummaryComponents(rowsByRun) {
+        const sortedRuns = [...runsCache].sort((a, b) => {
+          const ia = SCHEMA_ORDER.indexOf(schemaById[a] || "plain");
+          const ib = SCHEMA_ORDER.indexOf(schemaById[b] || "plain");
+          return (ia < 0 ? 99 : ia) - (ib < 0 ? 99 : ib);
+        });
+        const aggByRun = {};
+        sortedRuns.forEach(run => {
+          aggByRun[run] = getRunAggregates(rowsByRun[run] || []);
+        });
+        const tpsSet = new Set();
+        Object.values(aggByRun).forEach(agg => (agg.tpsLevels || []).forEach(t => tpsSet.add(t)));
+        const tpsLevels = [...tpsSet].sort((a, b) => a - b);
+        if (tpsLevels.length === 0) tpsLevels.push(200, 400, 600);
         const colors = ["#60a5fa", "#34d399", "#fbbf24", "#f87171"];
 
-        // Chart 1-12: per scenario, per TPS, compare ops (p95)
-        const grid1 = document.createElement("div");
-        grid1.className = "row";
-        grid1.style.gridTemplateColumns = "1fr 1fr";
-        grid1.style.gap = "16px";
-
-        runsCache.forEach((run, runIdx) => {
-          const label = runLabelById[run] || run;
-          const rows = rowsByRun[run] || [];
-          const pg = rows.filter(r => r.type === "pgbench");
-          tpsLevels.forEach((tps) => {
-            const panel = document.createElement("div");
-            panel.className = "panel";
-            const title = document.createElement("h3");
-            title.textContent = `${label} - ${tps} TPS (p95 by op)`;
-            const chartBox = document.createElement("div");
-            chartBox.className = "chart-box";
-            const canvas = document.createElement("canvas");
-            const chartId = `cmp_ops_${runIdx}_${tps}`;
-            canvas.id = chartId;
-            chartBox.appendChild(canvas);
-            panel.appendChild(title);
-            panel.appendChild(chartBox);
-            grid1.appendChild(panel);
-
-            const data = ops.map(op => {
-              const match = pg.find(r => (r.operation || "").toLowerCase() === op && Number(r.target_tps) === tps);
-              return Number(match ? match.latency_p95_ms : 0);
-            });
-            if (charts[chartId]) charts[chartId].destroy();
-            charts[chartId] = new Chart(canvas, {
-              type: "bar",
-              data: { labels: ops, datasets: [{ label: "p95 ms", data, backgroundColor: colors }] },
-              options: { responsive: true, scales: { y: { beginAtZero: true } } }
-            });
-          });
+        ["schemaDecision", "capacityVsLatency", "throughputEfficiency", "operationLatency", "clientServerBreakdown"].forEach(id => {
+          if (charts[id]) { charts[id].destroy(); charts[id] = null; }
         });
 
-        summaryOpByTps.appendChild(grid1);
+        drawSchemaDecisionTable(aggByRun, sortedRuns, rowsByRun, tpsLevels);
+        drawCapacityVsLatency(aggByRun, sortedRuns, tpsLevels, colors);
+        drawThroughputEfficiency(aggByRun, sortedRuns, colors);
+        drawOperationLatencyComparison(rowsByRun, sortedRuns, tpsLevels, colors);
+        drawClientServerBreakdown(rowsByRun, sortedRuns, colors);
+      }
 
-        // Chart 13-16: per scenario, ops across TPS (p95)
-        const grid2 = document.createElement("div");
-        grid2.className = "row";
-        grid2.style.gridTemplateColumns = "1fr 1fr";
-        grid2.style.gap = "16px";
+      function getReplicationFromRows(rows, maxTps) {
+        const pg = (rows || []).filter(r => r.type === "pgbench");
+        const atMax = pg.filter(r => (safeNum(r.target_tps) ?? 0) === maxTps);
+        if (!atMax.length) return null;
+        const avgV = atMax.map(r => safeNum(r.replication_avg_lag_ms)).filter(v => v != null);
+        const p95V = atMax.map(r => safeNum(r.replication_p95_lag_ms)).filter(v => v != null);
+        const maxV = atMax.map(r => safeNum(r.replication_max_lag_ms)).filter(v => v != null);
+        if (!avgV.length && !p95V.length && !maxV.length) return null;
+        const avg = avgV.length ? avgV.reduce((a, b) => a + b, 0) / avgV.length : null;
+        const p95 = p95V.length ? Math.max(...p95V) : null;
+        const max = maxV.length ? Math.max(...maxV) : null;
+        const lag = p95 ?? avg ?? max;
+        let drRisk = "—";
+        if (lag != null) {
+          if (lag < 100) drRisk = "Safe";
+          else if (lag <= 500) drRisk = "Warning";
+          else drRisk = "High Risk";
+        }
+        return { avg, p95, max, drRisk };
+      }
 
-        runsCache.forEach((run, runIdx) => {
-          const label = runLabelById[run] || run;
+      function drawSchemaDecisionTable(aggByRun, sortedRuns, rowsByRun, tpsLevels) {
+        const maxTps = tpsLevels.length ? tpsLevels[tpsLevels.length - 1] : 600;
+        const hasReplication = sortedRuns.some(run => {
+          const rep = getReplicationFromRows(rowsByRun[run], maxTps);
+          return rep != null;
+        });
+        const cols = ["Schema", "Max Stable TPS", "Achieved TPS @ Max", "P95 @200", "P95 @400", "P95 @600", "Latency Growth", "Efficiency", "Verdict"];
+        if (hasReplication) cols.push("Avg Lag", "P95 Lag", "Max Lag", "DR Risk");
+        const rows = sortedRuns.map(run => {
+          const agg = aggByRun[run] || {};
+          const schema = schemaById[run] || "plain";
+          const maxStable = agg.maxStableTps;
+          const atMax = maxStable && agg.byTps[maxStable] ? agg.byTps[maxStable].tpsAvg : null;
+          const fmt = (v) => (v != null && typeof v === "number") ? (v < 10 ? v.toFixed(2) : Math.round(v * 100) / 100) : "—";
+          const r = [
+            schema,
+            maxStable ?? "—",
+            atMax != null ? fmt(atMax) : "—",
+            agg.p95At200 != null ? fmt(agg.p95At200) : "—",
+            agg.p95At400 != null ? fmt(agg.p95At400) : "—",
+            agg.p95At600 != null ? fmt(agg.p95At600) : "—",
+            agg.latencyGrowth != null ? fmt(agg.latencyGrowth) : "—",
+            agg.efficiency != null ? fmt(agg.efficiency) : "—",
+            agg.verdict || "—"
+          ];
+          if (hasReplication) {
+            const rep = getReplicationFromRows(rowsByRun[run], maxTps);
+            r.push(rep ? fmt(rep.avg) : "—", rep ? fmt(rep.p95) : "—", rep ? fmt(rep.max) : "—", rep ? rep.drRisk : "—");
+          }
+          return r;
+        });
+        const head = "<tr>" + cols.map(h => `<th>${h}</th>`).join("") + "</tr>";
+        const body = rows.map(r => "<tr>" + r.map(c => `<td>${c}</td>`).join("") + "</tr>").join("");
+        schemaDecisionTable.innerHTML = rows.length ? `<table style="width:100%;font-size:12px;">${head}${body}</table>` : "<div class=\"muted\">No TPS data.</div>";
+      }
+
+      function drawCapacityVsLatency(aggByRun, sortedRuns, tpsLevels, colors) {
+        capacityVsLatency.innerHTML = "";
+        const canvas = document.createElement("canvas");
+        capacityVsLatency.appendChild(canvas);
+        const datasets = sortedRuns.map((run, i) => {
+          const agg = aggByRun[run] || {};
+          const data = tpsLevels.map(t => {
+            const d = agg.byTps && agg.byTps[t];
+            return d && d.p95Avg != null ? d.p95Avg : null;
+          });
+          return { label: schemaById[run] || run, data, borderColor: colors[i % colors.length], backgroundColor: colors[i % colors.length], fill: false };
+        });
+        charts.capacityVsLatency = new Chart(canvas, {
+          type: "line",
+          data: { labels: tpsLevels.map(t => `${t}`), datasets },
+          options: {
+            responsive: true,
+            scales: {
+              x: { title: { display: true, text: "Target TPS" } },
+              y: { beginAtZero: true, title: { display: true, text: "P95 latency (ms)" } }
+            }
+          }
+        });
+      }
+
+      function drawThroughputEfficiency(aggByRun, sortedRuns, colors) {
+        throughputEfficiency.innerHTML = "";
+        const canvas = document.createElement("canvas");
+        throughputEfficiency.appendChild(canvas);
+        const eff = sortedRuns.map(run => {
+          const agg = aggByRun[run] || {};
+          return agg.efficiency != null ? agg.efficiency : 0;
+        });
+        const barColors = eff.map(e => e >= 0.9 ? "#34d399" : e >= 0.8 ? "#fbbf24" : "#f87171");
+        charts.throughputEfficiency = new Chart(canvas, {
+          type: "bar",
+          data: {
+            labels: sortedRuns.map(r => schemaById[r] || r),
+            datasets: [{ label: "Efficiency", data: eff, backgroundColor: barColors }]
+          },
+          options: {
+            responsive: true,
+            scales: {
+              y: { beginAtZero: true, max: 1, title: { display: true, text: "Efficiency (0–1)" } }
+            }
+          }
+        });
+      }
+
+      function drawOperationLatencyComparison(rowsByRun, sortedRuns, tpsLevels, colors) {
+        operationLatencyComparison.innerHTML = "";
+        const canvas = document.createElement("canvas");
+        operationLatencyComparison.appendChild(canvas);
+        const ops = ["select", "insert", "update", "delete"];
+        const maxTps = tpsLevels.length ? tpsLevels[tpsLevels.length - 1] : 600;
+        const datasets = sortedRuns.map((run, i) => {
           const rows = rowsByRun[run] || [];
           const pg = rows.filter(r => r.type === "pgbench");
-
-          const panel = document.createElement("div");
-          panel.className = "panel";
-          const title = document.createElement("h3");
-          title.textContent = `${label} - 200 vs 400 vs 600 TPS (p95 by op)`;
-          const chartBox = document.createElement("div");
-          chartBox.className = "chart-box";
-          const canvas = document.createElement("canvas");
-          const chartId = `cmp_tps_${runIdx}`;
-          canvas.id = chartId;
-          chartBox.appendChild(canvas);
-          panel.appendChild(title);
-          panel.appendChild(chartBox);
-          grid2.appendChild(panel);
-
-          const datasets = ops.map((op, i) => {
-            const data = tpsLevels.map(tps => {
-              const match = pg.find(r => (r.operation || "").toLowerCase() === op && Number(r.target_tps) === tps);
-              return Number(match ? match.latency_p95_ms : 0);
-            });
-            return { label: op, data, borderColor: colors[i], backgroundColor: colors[i] };
+          const data = ops.map(op => {
+            const match = pg.find(r => (r.operation || "").toLowerCase() === op && (safeNum(r.target_tps) ?? 0) === maxTps);
+            return safeNum(match ? match.latency_p95_ms : null) ?? 0;
           });
-          if (charts[chartId]) charts[chartId].destroy();
-          charts[chartId] = new Chart(canvas, {
-            type: "line",
-            data: { labels: tpsLevels.map(t => `${t}`), datasets },
-            options: { responsive: true, scales: { y: { beginAtZero: true } } }
+          return { label: schemaById[run] || run, data, backgroundColor: colors[i % colors.length] };
+        });
+        charts.operationLatency = new Chart(canvas, {
+          type: "bar",
+          data: { labels: ops.map(o => o.toUpperCase()), datasets },
+          options: {
+            responsive: true,
+            scales: {
+              y: { beginAtZero: true, title: { display: true, text: "P95 latency (ms)" } }
+            }
+          }
+        });
+      }
+
+      function drawClientServerBreakdown(rowsByRun, sortedRuns, colors) {
+        clientServerBreakdown.innerHTML = "";
+        const canvas = document.createElement("canvas");
+        clientServerBreakdown.appendChild(canvas);
+        const tpsSet = new Set();
+        sortedRuns.forEach(run => {
+          const rows = rowsByRun[run] || [];
+          rows.filter(r => r.type === "pgbench").forEach(r => {
+            const t = safeNum(r.target_tps) ?? 0;
+            if (t > 0) tpsSet.add(t);
           });
         });
-
-        summaryOpAcrossTps.appendChild(grid2);
+        const maxTps = tpsSet.size ? Math.max(...tpsSet) : 600;
+        const server = [];
+        const overhead = [];
+        sortedRuns.forEach(run => {
+          const rows = rowsByRun[run] || [];
+          const pg = rows.filter(r => r.type === "pgbench");
+          const atMax = pg.filter(r => (safeNum(r.target_tps) ?? 0) === maxTps);
+          const serverP95 = atMax.length ? atMax.reduce((s, r) => s + (safeNum(r.yb_p95_ms) ?? 0), 0) / atMax.length : 0;
+          const clientP95 = atMax.length ? atMax.reduce((s, r) => s + (safeNum(r.latency_p95_ms) ?? 0), 0) / atMax.length : 0;
+          server.push(serverP95);
+          overhead.push(Math.max(0, clientP95 - serverP95));
+        });
+        charts.clientServerBreakdown = new Chart(canvas, {
+          type: "bar",
+          data: {
+            labels: sortedRuns.map(r => schemaById[r] || r),
+            datasets: [
+              { label: "Server P95 (ms)", data: server, backgroundColor: "#34d399" },
+              { label: "Overhead (ms)", data: overhead, backgroundColor: "#fbbf24" }
+            ]
+          },
+          options: {
+            responsive: true,
+            scales: {
+              x: { stacked: true },
+              y: { stacked: true, beginAtZero: true, title: { display: true, text: "Latency (ms)" } }
+            }
+          }
+        });
       }
 
       function activateRun(runset, run) {

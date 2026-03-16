@@ -2,6 +2,31 @@ import csv
 import os
 
 
+def _pg_stat(step, key):
+    pgs = step.get("pg_stat_statements")
+    if not pgs:
+        return None
+    return pgs.get(key)
+
+
+def _replication(step, key):
+    rep = step.get("replication_summary")
+    if not rep:
+        return None
+    return rep.get(key)
+
+
+
+
+def _overhead_ms(step):
+    """Approximate network+connection overhead = pgbench client avg - pg_stat server mean."""
+    client_avg = step.get("latency_avg_ms")
+    server_mean = _pg_stat(step, "mean_exec_time_ms")
+    if client_avg is not None and server_mean is not None:
+        return round(client_avg - server_mean, 3)
+    return None
+
+
 def _flatten_rows(summary):
     rows = []
     for phase in summary.get("phases", []):
@@ -19,6 +44,8 @@ def _flatten_rows(summary):
                         "target_tps": step.get("target_tps"),
                         "transactions_per_client": step.get("transactions_per_client"),
                         "total_transactions": step.get("total_transactions"),
+                        "clients": step.get("clients"),
+                        "jobs": step.get("jobs"),
                         "tps": step.get("tps"),
                         "tps_excluding": step.get("tps_excluding"),
                         "latency_avg_ms": step.get("latency_avg_ms"),
@@ -32,6 +59,18 @@ def _flatten_rows(summary):
                         "pgbench_log_files": _join_list(step.get("pgbench_log_files")),
                         "server_metrics": _join_metrics(step.get("server_metrics")),
                         "log": step.get("log"),
+                        "pg_stat_mean_ms": _pg_stat(step, "mean_exec_time_ms"),
+                        "pg_stat_min_ms": _pg_stat(step, "min_exec_time_ms"),
+                        "pg_stat_max_ms": _pg_stat(step, "max_exec_time_ms"),
+                        "pg_stat_calls": _pg_stat(step, "calls"),
+                        "overhead_ms": _overhead_ms(step),
+                        "yb_p50_ms": _pg_stat(step, "yb_p50_ms"),
+                        "yb_p90_ms": _pg_stat(step, "yb_p90_ms"),
+                        "yb_p95_ms": _pg_stat(step, "yb_p95_ms"),
+                        "yb_p99_ms": _pg_stat(step, "yb_p99_ms"),
+                        "replication_avg_lag_ms": _replication(step, "avg_lag_ms"),
+                        "replication_p95_lag_ms": _replication(step, "p95_lag_ms"),
+                        "replication_max_lag_ms": _replication(step, "max_lag_ms"),
                     }
                 )
         else:
@@ -46,6 +85,8 @@ def _flatten_rows(summary):
                     "target_tps": phase.get("target_tps"),
                     "transactions_per_client": phase.get("transactions_per_client"),
                     "total_transactions": phase.get("total_transactions"),
+                    "clients": phase.get("clients"),
+                    "jobs": phase.get("jobs"),
                     "tps": phase.get("tps"),
                     "tps_excluding": phase.get("tps_excluding"),
                     "latency_avg_ms": phase.get("latency_avg_ms"),
@@ -59,6 +100,18 @@ def _flatten_rows(summary):
                     "pgbench_log_files": _join_list(phase.get("pgbench_log_files")),
                     "server_metrics": _join_metrics(phase.get("server_metrics")),
                     "log": phase.get("log"),
+                    "pg_stat_mean_ms": _pg_stat(phase, "mean_exec_time_ms"),
+                    "pg_stat_min_ms": _pg_stat(phase, "min_exec_time_ms"),
+                    "pg_stat_max_ms": _pg_stat(phase, "max_exec_time_ms"),
+                    "pg_stat_calls": _pg_stat(phase, "calls"),
+                    "overhead_ms": _overhead_ms(phase),
+                    "yb_p50_ms": _pg_stat(phase, "yb_p50_ms"),
+                    "yb_p90_ms": _pg_stat(phase, "yb_p90_ms"),
+                    "yb_p95_ms": _pg_stat(phase, "yb_p95_ms"),
+                    "yb_p99_ms": _pg_stat(phase, "yb_p99_ms"),
+                    "replication_avg_lag_ms": _replication(phase, "avg_lag_ms"),
+                    "replication_p95_lag_ms": _replication(phase, "p95_lag_ms"),
+                    "replication_max_lag_ms": _replication(phase, "max_lag_ms"),
                 }
             )
     return rows
@@ -83,6 +136,8 @@ def _write_csv(rows, path):
         "target_tps",
         "transactions_per_client",
         "total_transactions",
+        "clients",
+        "jobs",
         "tps",
         "tps_excluding",
         "latency_avg_ms",
@@ -96,6 +151,18 @@ def _write_csv(rows, path):
         "pgbench_log_files",
         "server_metrics",
         "log",
+        "pg_stat_mean_ms",
+        "pg_stat_min_ms",
+        "pg_stat_max_ms",
+        "pg_stat_calls",
+        "overhead_ms",
+        "yb_p50_ms",
+        "yb_p90_ms",
+        "yb_p95_ms",
+        "yb_p99_ms",
+        "replication_avg_lag_ms",
+        "replication_p95_lag_ms",
+        "replication_max_lag_ms",
     ]
     with open(path, "w", encoding="utf-8", newline="") as f:
         writer = csv.DictWriter(f, fieldnames=fieldnames)
@@ -145,6 +212,18 @@ def _write_html(rows, path):
           <th>pgbench_log_files</th>
           <th>server_metrics</th>
           <th>log</th>
+          <th>pg_stat_mean_ms</th>
+          <th>pg_stat_min_ms</th>
+          <th>pg_stat_max_ms</th>
+          <th>pg_stat_calls</th>
+          <th>overhead_ms</th>
+          <th>yb_p50_ms</th>
+          <th>yb_p90_ms</th>
+          <th>yb_p95_ms</th>
+          <th>yb_p99_ms</th>
+          <th>replication_avg_lag_ms</th>
+          <th>replication_p95_lag_ms</th>
+          <th>replication_max_lag_ms</th>
         </tr>
       </thead>
       <tbody>
@@ -176,6 +255,18 @@ def _write_html(rows, path):
                     f"<td class=\"mono\">{_html(row.get('pgbench_log_files'))}</td>",
                     f"<td class=\"mono\">{_html(row.get('server_metrics'))}</td>",
                     f"<td class=\"mono\">{_html(row.get('log'))}</td>",
+                    f"<td>{_html(row.get('pg_stat_mean_ms'))}</td>",
+                    f"<td>{_html(row.get('pg_stat_min_ms'))}</td>",
+                    f"<td>{_html(row.get('pg_stat_max_ms'))}</td>",
+                    f"<td>{_html(row.get('pg_stat_calls'))}</td>",
+                    f"<td>{_html(row.get('overhead_ms'))}</td>",
+                    f"<td>{_html(row.get('yb_p50_ms'))}</td>",
+                    f"<td>{_html(row.get('yb_p90_ms'))}</td>",
+                    f"<td>{_html(row.get('yb_p95_ms'))}</td>",
+                    f"<td>{_html(row.get('yb_p99_ms'))}</td>",
+                    f"<td>{_html(row.get('replication_avg_lag_ms'))}</td>",
+                    f"<td>{_html(row.get('replication_p95_lag_ms'))}</td>",
+                    f"<td>{_html(row.get('replication_max_lag_ms'))}</td>",
                 ]
             )
             + "</tr>"

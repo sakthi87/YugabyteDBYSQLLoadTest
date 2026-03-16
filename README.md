@@ -144,7 +144,59 @@ Example (1,000,000 total transactions per phase):
   "total_transactions": 1000000
 }
 
-Note: `ramp` cannot be used together with `total_transactions` or `transactions_per_client`.
+Note: `ramp` can include `total_transactions` or `transactions_per_client` for record-based runs.
+
+Config & Script Organization
+-----------------------------
+
+Configs are organized by environment and mode:
+
+| Environment | Mode | Config path | Run script |
+|-------------|------|-------------|------------|
+| dev | TPS | `config/dev/tps/` | `scripts/dev/run_all_tps.sh` or `scripts/run_all.sh` |
+| dev | Transaction count | `config/dev/transaction_count/` | `scripts/dev/run_all_transaction_count.sh` |
+| dev | Capacity | `config/dev/capacity/` | `scripts/dev/run_all_capacity.sh` |
+| dev | **All** (TPS + tx count + capacity) | — | `scripts/dev/run_all.sh` |
+| **validation** | **All** (~45 min, script testing) | `config/validation/` | `scripts/validation/run_all.sh` |
+| **stretch** | TPS | `config/stretch/tps/` | `scripts/stretch/run_all_tps.sh` |
+| **stretch** | Transaction count | `config/stretch/transaction_count/` | `scripts/stretch/run_all_transaction_count.sh` |
+| **stretch** | Capacity | `config/stretch/capacity/` | `scripts/stretch/run_all_capacity.sh` |
+| **stretch** | **All** (TPS + tx count + capacity) | — | `scripts/stretch/run_all.sh` |
+| **xcluster** | TPS | `config/xcluster/tps/` | `scripts/xcluster/run_all_tps.sh` |
+| **xcluster** | Transaction count | `config/xcluster/transaction_count/` | `scripts/xcluster/run_all_transaction_count.sh` |
+| **xcluster** | Capacity | `config/xcluster/capacity/` | `scripts/xcluster/run_all_capacity.sh` |
+| **xcluster** | **All** (TPS + tx count + capacity) | — | `scripts/xcluster/run_all.sh` |
+| production | TPS | `config/production/tps/` | `scripts/production/run_all_tps.sh` or `scripts/run_all_production.sh` |
+| production | Transaction count | `config/production/transaction_count/` | `scripts/production/run_all_transaction_count.sh` |
+| production | Capacity | `config/production/capacity/` | `scripts/production/run_all_capacity.sh` |
+| production | **All** (TPS + tx count + capacity) | — | `scripts/production/run_all.sh` |
+
+Each mode has 4 schema variants: `plain`, `index`, `fk`, `index_fk`.
+
+- **TPS**: Rate-limited (`target_tps`). Dev: 200/400/600 TPS. Production: 1K–10K TPS.
+- **Transaction count**: Fixed records (`total_transactions`). Dev: 10K/20K/50K. Production: 50K/100K/200K.
+- **Capacity**: Max throughput (`duration_sec` only, no rate limit). Dev: 60/120 sec. Production: 60/120 sec with scaled clients.
+
+See `docs/CAPACITY_TESTING_AND_PGBOUNCER.md` for:
+- Clients/jobs scaling, connection reuse, PgBouncer setup
+- Stretch Cluster and XCluster implementation steps
+- Finding replication lag thresholds
+
+See `docs/VALIDATION_RUNBOOK.md` for:
+- Dev script validation plan and duration estimates
+- Quick validation (~30 min) via `scripts/validation/run_all.sh`
+- What to verify (scripts, dashboard, connection count)
+
+See `docs/REPLICATION_GUIDE.md` for propagating validation changes to dev/production.
+
+See `docs/CAPACITY_ASSESSMENT_APPROACHES.md` for:
+- Comparing pgbench vs pgbench+PgBouncer vs app drivers
+- What each approach can and cannot evaluate
+- Recommended assessment plan for Stretch Cluster and XCluster
+
+**Stretch vs XCluster Configs:**
+- **Stretch Cluster** (`config/stretch/`): `cluster_type: stretch`, production parameters (1K–10K TPS, 50K–200K tx, 60/120 sec capacity). No replication lag collection.
+- **XCluster** (`config/xcluster/`): `cluster_type: xcluster`, `xcluster_enabled: true`, production parameters. Collects replication lag every 5 sec during load. Dashboard shows Replication Lag Over Time and Schema Decision Table includes Avg Lag, P95 Lag, Max Lag, DR Risk.
 
 Runbook (5-Minute Setup)
 ------------------------
@@ -186,13 +238,59 @@ Review the Results
    - `report.html`
    - `latency_histogram.csv` (per step)
 
+Understanding Latency Metrics (pgbench vs pg_stat_statements)
+-------------------------------------------------------------
+
+All latency values in this toolkit are in **milliseconds (ms)**. The dashboard
+and reports show p50/p90/p95/p99 in ms.
+
+- **pgbench (client)**: Measures *client-side* round-trip time per transaction.
+  Includes network, connection, and full transaction execution.
+
+- **pg_stat_statements (server)**: *Server-side* query execution time at the DB
+  level. Enable with `server_metrics.pg_stat_statements: true` in config. The
+  schema scripts create the extension automatically.
+
+- **Overhead**: Approximate network + connection + protocol overhead =
+  pgbench client avg − pg_stat server mean.
+
+The dashboard "Latency Breakdown" chart shows client vs server vs overhead per
+step. Use server (pg_stat) for DB-level latency; use client (pgbench) for
+end-to-end application latency.
+
+**yb_latency_histogram** (YugabyteDB 2.18.1+): When enabled, the tool also
+fetches P50/P90/P95/P99 from `pg_stat_statements.yb_latency_histogram` via
+`yb_get_percentile`. See `docs/PG_STAT_STATEMENTS_ANALYSIS.md` for retention,
+long-run behavior, and optional periodic polling.
+
+TServer Metrics URL(s)
+----------------------
+
+The `--tserver-url` option accepts a single URL or comma-separated URLs for
+multi-node clusters. Metrics are captured from each URL before and after each step.
+
+**Single URL:**
+
+   bash scripts/run_all.sh --tserver-url http://127.0.0.1:9001/metrics
+
+**Multiple URLs (comma-separated):**
+
+   bash scripts/run_all.sh --tserver-url "http://node1:9000/metrics,http://node2:9000/metrics,http://node3:9000/metrics"
+
+**Stretch cluster (2 Central + 2 East + 1 on-prem):**
+
+   bash scripts/run_all_production.sh \
+     --tserver-url "http://central1:9000/metrics,http://central2:9000/metrics,http://east1:9000/metrics,http://east2:9000/metrics,http://onprem1:9000/metrics"
+
 Parameterization
 ----------------
 
-All `config/scenario_*.json` files support environment variables:
+All config files support environment variables:
 
 - `YB_HOST`, `YB_PORT`, `YB_USER`, `YB_PASSWORD`, `YB_DBNAME`
-- `YB_TSERVER_METRICS` (example: `http://host:9000/metrics`)
+- `YB_TSERVER_METRICS` (example: `http://host:9000/metrics` or comma-separated URLs)
 - `YB_ENV_LABEL` (optional label used in run description)
+- `server_metrics.pg_stat_statements`: true to capture server-side latency
+- `server_metrics.pg_stat_statements_interval_sec`: 5 to poll every 5 sec and build latency-over-time
 
 The `scripts/run_all.sh` script sets these automatically from CLI flags.

@@ -1,0 +1,29 @@
+{
+  "run_label": "index_transaction_count",
+  "run_description": "Dev transaction count: 10 tables with indexes, no FKs. Fixed-record runs (10K/20K/50K tx). env: ${YB_ENV_LABEL}",
+  "db": {
+    "host": "${YB_HOST}",
+    "port": "${YB_PORT}",
+    "user": "${YB_USER}",
+    "password": "${YB_PASSWORD}",
+    "dbname": "${YB_DBNAME}"
+  },
+  "schema": {
+    "create_db": true,
+    "drop_db": true,
+    "schema_sql_file": "../../../scripts/scenarios/schema_index.sql",
+    "preload_sql_file": "../../../scripts/scenarios/preload_10_tables.sql"
+  },
+  "reports": { "csv": true, "html": true },
+  "server_metrics": {
+    "tserver_urls": ["${YB_TSERVER_METRICS}"],
+    "pg_stat_statements": true,
+    "pg_stat_statements_interval_sec": 5
+  },
+  "phases": [
+    { "name": "select", "type": "pgbench", "clients": 8, "jobs": 2, "log_transactions": true, "report_per_script": true, "script": "../../../scripts/pgbench10/select.sql", "ramp": [{ "total_transactions": 10000, "clients": 8, "jobs": 2 }, { "total_transactions": 20000, "clients": 16, "jobs": 4 }, { "total_transactions": 50000, "clients": 32, "jobs": 4 }] },
+    { "name": "insert", "type": "pgbench", "clients": 8, "jobs": 2, "log_transactions": true, "report_per_script": true, "script": "../../../scripts/pgbench10/insert.sql", "ramp": [{ "total_transactions": 10000, "clients": 8, "jobs": 2 }, { "total_transactions": 20000, "clients": 16, "jobs": 4 }, { "total_transactions": 50000, "clients": 32, "jobs": 4 }] },
+    { "name": "update", "type": "pgbench", "clients": 8, "jobs": 2, "log_transactions": true, "report_per_script": true, "script": "../../../scripts/pgbench10/update.sql", "ramp": [{ "total_transactions": 10000, "clients": 8, "jobs": 2 }, { "total_transactions": 20000, "clients": 16, "jobs": 4 }, { "total_transactions": 50000, "clients": 32, "jobs": 4 }] },
+    { "name": "delete", "type": "pgbench", "clients": 8, "jobs": 2, "log_transactions": true, "report_per_script": true, "script": "../../../scripts/pgbench10/delete.sql", "ramp": [{ "total_transactions": 10000, "clients": 8, "jobs": 2 }, { "total_transactions": 20000, "clients": 16, "jobs": 4 }, { "total_transactions": 50000, "clients": 32, "jobs": 4 }] }
+  ]
+}

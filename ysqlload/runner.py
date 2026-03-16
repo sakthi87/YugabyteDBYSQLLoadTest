@@ -1,11 +1,18 @@
 import json
+import math
 import os
 import re
 import subprocess
+import threading
 import time
 
 from ysqlload.metrics import capture_metrics
 from ysqlload.report import generate_reports
+from ysqlload.replication_metrics import (
+    fetch_replication_lag_ms,
+    poll_replication_lag,
+    aggregate_lag_snapshot,
+)
 
 
 def _timestamp():
@@ -28,6 +35,195 @@ def _run_command(cmd, env, log_path, dry_run=False, cwd=None):
         )
 
     return {"cmd": cmd, "exit_code": proc.returncode}
+
+
+def _run_pgbench_with_polling(
+    cmd, env, log_path, cwd, db, dbname, poll_interval_sec,
+    replication_urls=None, replication_interval_sec=0,
+):
+    """
+    Run pgbench in background and poll pg_stat_statements every poll_interval_sec.
+    Optionally poll replication lag when replication_urls and replication_interval_sec set.
+    Returns (result_dict, snapshots_list, replication_snapshots_list).
+    """
+    snapshots = []
+    replication_snapshots = []
+    stop_polling = threading.Event()
+    poll_replication = bool(replication_urls and replication_interval_sec > 0)
+    rep_interval = replication_interval_sec or poll_interval_sec
+
+    def poll_loop():
+        rep_counter = 0
+        while not stop_polling.is_set():
+            stats = _query_pg_stat_statements(db, dbname, env, reset_before=False)
+            if stats:
+                snapshots.append({
+                    "elapsed_sec": int(time.time() - start_time),
+                    "mean_ms": stats.get("mean_exec_time_ms"),
+                    "min_ms": stats.get("min_exec_time_ms"),
+                    "max_ms": stats.get("max_exec_time_ms"),
+                    "calls": stats.get("calls"),
+                    "yb_p50_ms": stats.get("yb_p50_ms"),
+                    "yb_p90_ms": stats.get("yb_p90_ms"),
+                    "yb_p95_ms": stats.get("yb_p95_ms"),
+                    "yb_p99_ms": stats.get("yb_p99_ms"),
+                })
+            if poll_replication and rep_counter % max(1, rep_interval // max(1, poll_interval_sec)) == 0:
+                lag = fetch_replication_lag_ms(replication_urls, timeout_sec=3)
+                replication_snapshots.append({
+                    "elapsed_sec": int(time.time() - start_time),
+                    "timestamp": int(time.time()),
+                    "lag_ms": round(lag, 2) if lag is not None else None,
+                })
+            rep_counter += 1
+            for _ in range(poll_interval_sec):
+                if stop_polling.wait(timeout=1):
+                    return
+
+    start_time = time.time()
+    poller = threading.Thread(target=poll_loop, daemon=True)
+    poller.start()
+
+    with open(log_path, "w", encoding="utf-8") as log_file:
+        proc = subprocess.run(
+            cmd,
+            env=env,
+            cwd=cwd,
+            stdout=log_file,
+            stderr=subprocess.STDOUT,
+            text=True,
+            check=False,
+        )
+
+    stop_polling.set()
+    poller.join(timeout=poll_interval_sec + 2)
+
+    # Final snapshot
+    stats = _query_pg_stat_statements(db, dbname, env, reset_before=False)
+    if stats:
+        snapshots.append({
+            "elapsed_sec": int(time.time() - start_time),
+            "mean_ms": stats.get("mean_exec_time_ms"),
+            "min_ms": stats.get("min_exec_time_ms"),
+            "max_ms": stats.get("max_exec_time_ms"),
+            "calls": stats.get("calls"),
+            "yb_p50_ms": stats.get("yb_p50_ms"),
+            "yb_p90_ms": stats.get("yb_p90_ms"),
+            "yb_p95_ms": stats.get("yb_p95_ms"),
+            "yb_p99_ms": stats.get("yb_p99_ms"),
+        })
+    if poll_replication:
+        lag = fetch_replication_lag_ms(replication_urls, timeout_sec=3)
+        replication_snapshots.append({
+            "elapsed_sec": int(time.time() - start_time),
+            "timestamp": int(time.time()),
+            "lag_ms": round(lag, 2) if lag is not None else None,
+        })
+
+    return {"cmd": cmd, "exit_code": proc.returncode}, snapshots, replication_snapshots
+
+
+def _run_psql_query(db, dbname, sql, env):
+    """Run psql -t -A and return (stdout, exit_code)."""
+    cmd = [
+        "psql",
+        "-h", str(db["host"]),
+        "-p", str(db["port"]),
+        "-U", str(db["user"]),
+        "-d", dbname,
+        "-t", "-A",
+        "-c", sql,
+    ]
+    proc = subprocess.run(
+        cmd,
+        env=env,
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    return (proc.stdout or "").strip(), proc.returncode
+
+
+def _query_pg_stat_statements(db, dbname, env, reset_before=False):
+    """
+    Query pg_stat_statements for server-side execution time of our workload (t1-t10).
+    Returns dict with mean/min/max, calls, and optionally yb_latency_histogram percentiles (YugabyteDB).
+    Requires: CREATE EXTENSION pg_stat_statements; (and superuser for reset).
+    """
+    if reset_before:
+        _, code = _run_psql_query(db, dbname, "SELECT pg_stat_statements_reset();", env)
+        if code != 0:
+            return None  # reset may need superuser
+    # PostgreSQL 14+ / YugabyteDB: total_exec_time, min_exec_time, max_exec_time
+    sql = """
+    SELECT json_build_object(
+      'mean', COALESCE(SUM(total_exec_time)::float / NULLIF(SUM(calls), 0), 0),
+      'min', COALESCE(MIN(min_exec_time), 0),
+      'max', COALESCE(MAX(max_exec_time), 0),
+      'calls', COALESCE(SUM(calls), 0)::bigint
+    )::text
+    FROM pg_stat_statements
+    WHERE (query LIKE '%FROM t%' OR query LIKE '%INTO t%' OR query LIKE '%UPDATE t%' OR query LIKE '%DELETE FROM t%')
+      AND query NOT LIKE '%pg_stat_statements%'
+    """
+    out, code = _run_psql_query(db, dbname, sql, env)
+    if code != 0 or not out:
+        return None
+    result = None
+    try:
+        data = json.loads(out)
+        result = {
+            "mean_exec_time_ms": round(float(data.get("mean", 0)), 3),
+            "min_exec_time_ms": round(float(data.get("min", 0)), 3),
+            "max_exec_time_ms": round(float(data.get("max", 0)), 3),
+            "calls": int(data.get("calls", 0)),
+        }
+    except (json.JSONDecodeError, ValueError, TypeError):
+        return None
+
+    # YugabyteDB: yb_latency_histogram + yb_get_percentile for P50/P90/P95/P99 (dominant query by calls)
+    sql_hist = """
+    WITH top AS (
+      SELECT yb_latency_histogram
+      FROM pg_stat_statements
+      WHERE (query LIKE '%FROM t%' OR query LIKE '%INTO t%' OR query LIKE '%UPDATE t%' OR query LIKE '%DELETE FROM t%')
+        AND query NOT LIKE '%pg_stat_statements%'
+        AND yb_latency_histogram IS NOT NULL
+      ORDER BY calls DESC
+      LIMIT 1
+    )
+    SELECT json_build_object(
+      'p50', yb_get_percentile(yb_latency_histogram, 50),
+      'p90', yb_get_percentile(yb_latency_histogram, 90),
+      'p95', yb_get_percentile(yb_latency_histogram, 95),
+      'p99', yb_get_percentile(yb_latency_histogram, 99),
+      'histogram', yb_latency_histogram
+    )::text
+    FROM top
+    """
+    out_hist, code_hist = _run_psql_query(db, dbname, sql_hist, env)
+    if code_hist == 0 and out_hist:
+        try:
+            hist_data = json.loads(out_hist)
+            result["yb_p50_ms"] = _round_safe(hist_data.get("p50"))
+            result["yb_p90_ms"] = _round_safe(hist_data.get("p90"))
+            result["yb_p95_ms"] = _round_safe(hist_data.get("p95"))
+            result["yb_p99_ms"] = _round_safe(hist_data.get("p99"))
+        except (json.JSONDecodeError, ValueError, TypeError, KeyError):
+            pass
+    return result
+
+
+def _round_safe(val):
+    if val is None:
+        return None
+    try:
+        f = float(val)
+        if not math.isfinite(f):
+            return None  # inf, -inf, nan -> null in JSON
+        return round(f, 3)
+    except (ValueError, TypeError):
+        return None
 
 
 def _parse_pgbench_stats(log_path):
@@ -98,32 +294,21 @@ def _extract_latency_samples(log_dir):
 
 
 def _parse_pgbench_log_line(line):
+    """Parse pgbench -l log line. Format: client_id transaction_no time_us script_no time_epoch time_us [schedule_lag]
+    Column 2 = transaction elapsed time in MICROSECONDS. Column 4 = Unix epoch (seconds)."""
     parts = line.strip().split()
     if len(parts) < 6:
         return None
     try:
         ints = [int(p) for p in parts]
     except ValueError:
-        return None
+        return None  # skip "skipped", "failed", etc.
 
-    epoch_idx = None
-    for i, val in enumerate(ints):
-        if val > 1_500_000_000:
-            epoch_idx = i
-            break
-    if epoch_idx is None or epoch_idx < 2:
+    # Per PostgreSQL docs: col 0=client_id, 1=transaction_no, 2=latency_us, 3=script_no, 4=time_epoch, 5=time_us
+    latency_us = ints[2]
+    time_sec = ints[4]
+    if not (0 <= latency_us <= 60_000_000):  # 0 to 60 sec max
         return None
-
-    time_sec = ints[epoch_idx]
-    latency_candidates = [ints[epoch_idx - 2], ints[epoch_idx - 1]]
-    latency_us = None
-    for candidate in latency_candidates:
-        if 0 <= candidate <= 10_000_000:
-            latency_us = candidate
-            break
-    if latency_us is None:
-        return None
-
     return {"time_sec": time_sec, "latency_us": latency_us}
 
 
@@ -182,10 +367,15 @@ def run_all(config, run_root, dry_run=False):
     schema = config["schema"]
     phases = config["phases"]
     server_metrics = config.get("server_metrics", {})
+    cluster = config.get("cluster", {})
     summary = {
         "run_dir": run_dir,
         "run_label": config.get("run_label", ""),
         "run_description": config.get("run_description", ""),
+        "cluster_type": cluster.get("cluster_type", "stretch"),
+        "cluster_topology": cluster.get("cluster_topology", ""),
+        "replication_mode": cluster.get("replication_mode", "none"),
+        "xcluster_enabled": bool(cluster.get("xcluster_enabled", False)),
         "phases": [],
         "schema": {},
     }
@@ -241,10 +431,14 @@ def run_all(config, run_root, dry_run=False):
     for phase in phases:
         phase_type = phase.get("type")
         name = phase.get("name", phase_type or "phase")
-        if phase_type == "pgbench" and server_metrics.get("tserver_urls"):
+        if phase_type == "pgbench" and (
+            server_metrics.get("tserver_urls")
+            or server_metrics.get("pg_stat_statements")
+            or server_metrics.get("pg_stat_statements_interval_sec")
+        ):
             phase.setdefault("server_metrics", server_metrics)
         if phase_type == "pgbench":
-            result = _run_pgbench_phase(db, phase, run_dir, base_env, dry_run)
+            result = _run_pgbench_phase(db, phase, run_dir, base_env, dry_run, config)
         elif phase_type == "http":
             result = _run_http_phase(phase, run_dir, base_env, dry_run)
         else:
@@ -313,7 +507,7 @@ def _run_psql_file(db, dbname, sql_file, run_dir, env, label, dry_run):
     return result
 
 
-def _run_pgbench_phase(db, phase, run_dir, env, dry_run):
+def _run_pgbench_phase(db, phase, run_dir, env, dry_run, config=None):
     name = phase.get("name", "pgbench")
     steps = []
     ramp = phase.get("ramp", [])
@@ -340,12 +534,27 @@ def _run_pgbench_phase(db, phase, run_dir, env, dry_run):
     elif ramp:
         for idx, step in enumerate(ramp, start=1):
             target_tps = step.get("target_tps", phase.get("target_tps"))
-            tps_label = f"{target_tps}tps" if target_tps is not None else f"step{idx}"
+            total_tx = step.get("total_transactions")
+            tx_per_client = step.get("transactions_per_client")
+            clients = step.get("clients", phase.get("clients", 8))
+            jobs = step.get("jobs", phase.get("jobs", 2))
+            if total_tx and not tx_per_client:
+                tx_per_client = max(1, (int(total_tx) + clients - 1) // clients)
+            if total_tx or tx_per_client:
+                label = f"{total_tx or tx_per_client * clients}tx"
+            elif target_tps is not None:
+                label = f"{target_tps}tps"
+            else:
+                label = f"capacity_step{idx}"
             steps.append(
                 {
-                    "name": f"{name}_{tps_label}",
+                    "name": f"{name}_{label}",
                     "duration_sec": step.get("duration_sec"),
                     "target_tps": target_tps,
+                    "transactions_per_client": int(tx_per_client) if tx_per_client else None,
+                    "total_transactions": int(total_tx) if total_tx else None,
+                    "clients": clients,
+                    "jobs": jobs,
                 }
             )
     else:
@@ -375,7 +584,47 @@ def _run_pgbench_phase(db, phase, run_dir, env, dry_run):
             server_metrics.extend(
                 capture_metrics(tserver_urls, step_dir, f"{step['name']}_before")
             )
-        result = _run_command(cmd, env, log_path, dry_run=dry_run, cwd=step_dir)
+        sm = phase.get("server_metrics", {})
+        pg_stat_enabled = sm.get("pg_stat_statements", False)
+        poll_interval = int(sm.get("pg_stat_statements_interval_sec", 0) or 0)
+        config = config or {}
+        xcluster_enabled = bool(config.get("cluster", {}).get("xcluster_enabled", False))
+        replication_interval = int(config.get("replication_metrics", {}).get("interval_sec", 0) or 0)
+        replication_urls = sm.get("tserver_urls", []) if xcluster_enabled and replication_interval > 0 else None
+        replication_snapshots = []
+        if pg_stat_enabled and not dry_run:
+            _query_pg_stat_statements(db, db["dbname"], env, reset_before=True)
+        if poll_interval > 0 and pg_stat_enabled and not dry_run:
+            result, pg_stat_snapshots, replication_snapshots = _run_pgbench_with_polling(
+                cmd, env, log_path, step_dir, db, db["dbname"], poll_interval,
+                replication_urls=replication_urls,
+                replication_interval_sec=replication_interval if replication_urls else 0,
+            )
+            snapshots_path = os.path.join(step_dir, "pg_stat_statements_over_time.json")
+            with open(snapshots_path, "w", encoding="utf-8") as f:
+                json.dump({"interval_sec": poll_interval, "snapshots": pg_stat_snapshots}, f, indent=2)
+            if replication_snapshots:
+                rep_path = os.path.join(step_dir, "replication_lag_over_time.json")
+                with open(rep_path, "w", encoding="utf-8") as f:
+                    json.dump({"interval_sec": replication_interval, "snapshots": replication_snapshots}, f, indent=2)
+            pg_stat_stats = None
+            if pg_stat_snapshots:
+                last = pg_stat_snapshots[-1]
+                pg_stat_stats = {
+                    "mean_exec_time_ms": last.get("mean_ms"),
+                    "min_exec_time_ms": last.get("min_ms"),
+                    "max_exec_time_ms": last.get("max_ms"),
+                    "calls": last.get("calls"),
+                    "yb_p50_ms": last.get("yb_p50_ms"),
+                    "yb_p90_ms": last.get("yb_p90_ms"),
+                    "yb_p95_ms": last.get("yb_p95_ms"),
+                    "yb_p99_ms": last.get("yb_p99_ms"),
+                }
+        else:
+            result = _run_command(cmd, env, log_path, dry_run=dry_run, cwd=step_dir)
+            pg_stat_stats = None
+            if pg_stat_enabled and not dry_run:
+                pg_stat_stats = _query_pg_stat_statements(db, db["dbname"], env, reset_before=False)
         if tserver_urls and not dry_run:
             server_metrics.extend(
                 capture_metrics(tserver_urls, step_dir, f"{step['name']}_after")
@@ -391,8 +640,19 @@ def _run_pgbench_phase(db, phase, run_dir, env, dry_run):
                 "target_tps": step["target_tps"],
                 "transactions_per_client": step.get("transactions_per_client"),
                 "total_transactions": step.get("total_transactions"),
+                "clients": step.get("clients"),
+                "jobs": step.get("jobs"),
             }
         )
+        if pg_stat_stats:
+            result["pg_stat_statements"] = pg_stat_stats
+        if poll_interval > 0 and pg_stat_enabled and not dry_run:
+            result["pg_stat_statements_over_time"] = os.path.join(step_dir, "pg_stat_statements_over_time.json")
+        if replication_snapshots and not dry_run:
+            result["replication_lag_over_time"] = os.path.join(step_dir, "replication_lag_over_time.json")
+            rep_agg = aggregate_lag_snapshot(replication_snapshots)
+            if rep_agg:
+                result["replication_summary"] = rep_agg
         if not dry_run:
             result.update(_parse_pgbench_stats(log_path))
             if phase.get("log_transactions"):
@@ -413,6 +673,8 @@ def _run_pgbench_phase(db, phase, run_dir, env, dry_run):
 
 
 def _build_pgbench_cmd(db, phase, step):
+    clients = step.get("clients", phase.get("clients", 1))
+    jobs = step.get("jobs", phase.get("jobs", 1))
     cmd = [
         "pgbench",
         "-h",
@@ -425,11 +687,14 @@ def _build_pgbench_cmd(db, phase, step):
         str(db["dbname"]),
         "-n",
         "-c",
-        str(phase.get("clients", 1)),
+        str(clients),
         "-j",
-        str(phase.get("jobs", 1)),
+        str(jobs),
     ]
-    if step.get("duration_sec") is not None:
+    tx_per_client = step.get("transactions_per_client")
+    if tx_per_client:
+        cmd.extend(["-t", str(tx_per_client)])
+    elif step.get("duration_sec") is not None:
         cmd.extend(["-T", str(step.get("duration_sec", 60))])
 
     scripts = []
@@ -456,10 +721,6 @@ def _build_pgbench_cmd(db, phase, step):
 
     if phase.get("log_transactions"):
         cmd.append("-l")
-
-    tx_per_client = step.get("transactions_per_client")
-    if tx_per_client:
-        cmd.extend(["-t", str(tx_per_client)])
 
     target_tps = step.get("target_tps")
     if target_tps:

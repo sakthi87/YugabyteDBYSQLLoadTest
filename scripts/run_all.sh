@@ -1,23 +1,29 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+cd "$(cd "$SCRIPT_DIR/.." && pwd)"
+
 usage() {
   cat <<'EOF'
 Usage: bash scripts/run_all.sh [options]
 
+Runs dev TPS configs (alias for scripts/dev/run_all_tps.sh).
+
 Options:
-  --run-root PATH          Run set folder under runs/ (default: runs/<timestamp>_run)
+  --run-root PATH          Run set folder (default: runs/<timestamp>_dev_tps)
   --host HOST              DB host (default: 127.0.0.1)
   --port PORT              DB port (default: 5433)
   --user USER              DB user (default: yugabyte)
   --password PASS          DB password (default: empty)
   --dbname NAME            DB name (default: yb_load_test)
-  --tserver-url URL        TServer metrics URL (default: http://127.0.0.1:9000/metrics)
+  --tserver-url URLS       TServer metrics URL(s), comma-separated for multiple (default: http://127.0.0.1:9000/metrics)
   --env-label LABEL        Optional label to append to run_description
   -h, --help               Show help
 
 Examples:
   bash scripts/run_all.sh --run-root runs/stage_2026_03_12_run1 --host 10.20.30.40 --port 5433 --user yugabyte --password secret
+  bash scripts/run_all.sh --tserver-url "http://node1:9000/metrics,http://node2:9000/metrics"
 EOF
 }
 
@@ -46,7 +52,7 @@ while [[ $# -gt 0 ]]; do
 done
 
 if [[ -z "$run_root" ]]; then
-  run_root="runs/$(date +%Y%m%d-%H%M%S)_run"
+  run_root="runs/$(date +%Y%m%d-%H%M%S)_dev_tps"
 fi
 
 mkdir -p "$run_root"
@@ -60,10 +66,10 @@ export YB_TSERVER_METRICS="$tserver_url"
 export YB_ENV_LABEL="$env_label"
 
 configs=(
-  "config/scenario_plain.json"
-  "config/scenario_index.json"
-  "config/scenario_fk.json"
-  "config/scenario_index_fk.json"
+  "config/dev/tps/plain.json"
+  "config/dev/tps/index.json"
+  "config/dev/tps/fk.json"
+  "config/dev/tps/index_fk.json"
 )
 
 for cfg in "${configs[@]}"; do
@@ -72,3 +78,5 @@ for cfg in "${configs[@]}"; do
 done
 
 echo "Run set completed: $run_root"
+echo "Starting dashboard at http://127.0.0.1:8787"
+python3 -m ysqlload.cli --serve-only --run-root "$run_root"

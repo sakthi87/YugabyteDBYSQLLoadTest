@@ -3,4 +3,4 @@
 UPDATE account
 SET balance = balance + :delta,
     updated_at = now()
-WHERE id = :aid;
+WHERE id = uuid_from_int(:aid);

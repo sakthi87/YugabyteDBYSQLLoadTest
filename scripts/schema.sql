@@ -1,13 +1,25 @@
 -- Sample schema. Replace with your own tables.
+CREATE EXTENSION IF NOT EXISTS pgcrypto;
+
+CREATE OR REPLACE FUNCTION uuid_from_int(n BIGINT) RETURNS UUID AS $$
+  SELECT (
+    substr(md5(n::text), 1, 8) || '-' ||
+    substr(md5(n::text), 9, 4) || '-' ||
+    substr(md5(n::text), 13, 4) || '-' ||
+    substr(md5(n::text), 17, 4) || '-' ||
+    substr(md5(n::text), 21, 12)
+  )::uuid;
+$$ LANGUAGE sql IMMUTABLE;
+
 CREATE TABLE IF NOT EXISTS account (
-  id BIGINT PRIMARY KEY,
+  id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
   balance BIGINT NOT NULL,
   updated_at TIMESTAMP NOT NULL DEFAULT now()
 );
 
 CREATE TABLE IF NOT EXISTS account_log (
-  id BIGSERIAL PRIMARY KEY,
-  account_id BIGINT NOT NULL,
+  id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  account_id UUID NOT NULL,
   delta BIGINT NOT NULL,
   created_at TIMESTAMP NOT NULL DEFAULT now()
 );
