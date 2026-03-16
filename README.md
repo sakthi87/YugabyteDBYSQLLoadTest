@@ -198,6 +198,167 @@ See `docs/CAPACITY_ASSESSMENT_APPROACHES.md` for:
 - **Stretch Cluster** (`config/stretch/`): `cluster_type: stretch`, production parameters (1K–10K TPS, 50K–200K tx, 60/120 sec capacity). No replication lag collection.
 - **XCluster** (`config/xcluster/`): `cluster_type: xcluster`, `xcluster_enabled: true`, production parameters. Collects replication lag every 5 sec during load. Dashboard shows Replication Lag Over Time and Schema Decision Table includes Avg Lag, P95 Lag, Max Lag, DR Risk.
 
+---
+
+Running Stretch Cluster Load Tests
+---------------------------------
+
+Follow these steps to run load tests on a Stretch Cluster (2c-2e-1onprem or similar).
+
+**Prerequisites:**
+- pgbench, psql, Python 3.9+
+- VM in the same region as your Stretch Cluster leaders (e.g., Azure Central)
+- YugabyteDB Stretch Cluster running with YSQL enabled
+
+**Step 1: Set connection parameters**
+
+Replace placeholders with your actual values:
+
+| Parameter | Description | Example |
+|-----------|-------------|---------|
+| `--host` | YSQL endpoint (load balancer or any node) | `stretch-ysql.example.com` |
+| `--port` | YSQL port | `5433` |
+| `--user` | DB user | `yugabyte` |
+| `--password` | DB password (empty if none) | `""` |
+| `--dbname` | Database name | `yb_load_test` |
+| `--tserver-url` | TServer metrics URL(s) for before/after snapshots | `http://tserver1:9000/metrics` or comma-separated for multiple |
+| `--env-label` | Optional label for run description | `prod-stretch` |
+| `--run-root` | Custom output folder (default: `runs/stretch_<timestamp>`) | `runs/my_stretch_run` |
+
+**Step 2: Run the load test**
+
+Choose one of:
+
+```bash
+# TPS only (4 configs: plain, index, fk, index_fk)
+bash scripts/stretch/run_all_tps.sh \
+  --host <YSQL_HOST> --port 5433 --user yugabyte --password "" \
+  --dbname yb_load_test \
+  --tserver-url "http://<TSERVER>:9000/metrics" \
+  --env-label prod-stretch
+
+# Transaction count only (4 configs)
+bash scripts/stretch/run_all_transaction_count.sh \
+  --host <YSQL_HOST> --port 5433 --user yugabyte --password "" \
+  --dbname yb_load_test \
+  --tserver-url "http://<TSERVER>:9000/metrics" \
+  --env-label prod-stretch
+
+# Capacity only (4 configs)
+bash scripts/stretch/run_all_capacity.sh \
+  --host <YSQL_HOST> --port 5433 --user yugabyte --password "" \
+  --dbname yb_load_test \
+  --tserver-url "http://<TSERVER>:9000/metrics" \
+  --env-label prod-stretch
+
+# All 12 configs (TPS + transaction count + capacity)
+bash scripts/stretch/run_all.sh \
+  --host <YSQL_HOST> --port 5433 --user yugabyte --password "" \
+  --dbname yb_load_test \
+  --tserver-url "http://<TSERVER>:9000/metrics" \
+  --env-label prod-stretch
+```
+
+**Step 3: View results**
+
+The script starts the dashboard automatically. Open `http://127.0.0.1:8787`, select the run set, and review Summary Comparison, per-run charts, and raw outputs in each run folder.
+
+---
+
+Running XCluster Load Tests
+---------------------------
+
+Follow these steps to run load tests on an XCluster setup (active-passive DR).
+
+**Prerequisites:**
+- Same as Stretch Cluster
+- XCluster replication configured (source → target)
+- **Important:** `--tserver-url` must point to **SOURCE cluster** tserver(s) for replication lag metrics
+
+**Step 1: Set connection parameters**
+
+| Parameter | Description | Example |
+|-----------|-------------|---------|
+| `--host` | YSQL endpoint of **SOURCE (active)** cluster | `xcluster-source-ysql.example.com` |
+| `--port` | YSQL port | `5433` |
+| `--user` | DB user | `yugabyte` |
+| `--password` | DB password | `""` |
+| `--dbname` | Database name | `yb_load_test` |
+| `--tserver-url` | **SOURCE cluster** tserver metrics URL(s) — required for replication lag | `http://source-tserver1:9000/metrics` |
+| `--env-label` | Optional label | `prod-xcluster` |
+| `--run-root` | Custom output folder (default: `runs/xcluster_<timestamp>`) | `runs/my_xcluster_run` |
+
+**Step 2: Run the load test**
+
+```bash
+# TPS only (collects replication lag every 5 sec during load)
+bash scripts/xcluster/run_all_tps.sh \
+  --host <SOURCE_YSQL_HOST> --port 5433 --user yugabyte --password "" \
+  --dbname yb_load_test \
+  --tserver-url "http://<SOURCE_TSERVER>:9000/metrics" \
+  --env-label prod-xcluster
+
+# Transaction count only
+bash scripts/xcluster/run_all_transaction_count.sh \
+  --host <SOURCE_YSQL_HOST> --port 5433 --user yugabyte --password "" \
+  --dbname yb_load_test \
+  --tserver-url "http://<SOURCE_TSERVER>:9000/metrics" \
+  --env-label prod-xcluster
+
+# Capacity only
+bash scripts/xcluster/run_all_capacity.sh \
+  --host <SOURCE_YSQL_HOST> --port 5433 --user yugabyte --password "" \
+  --dbname yb_load_test \
+  --tserver-url "http://<SOURCE_TSERVER>:9000/metrics" \
+  --env-label prod-xcluster
+
+# All 12 configs
+bash scripts/xcluster/run_all.sh \
+  --host <SOURCE_YSQL_HOST> --port 5433 --user yugabyte --password "" \
+  --dbname yb_load_test \
+  --tserver-url "http://<SOURCE_TSERVER>:9000/metrics" \
+  --env-label prod-xcluster
+```
+
+**Step 3: View results**
+
+Open `http://127.0.0.1:8787`. For XCluster runs you will see:
+- **Replication Lag Over Time** chart (per step)
+- **Schema Decision Table** with Avg Lag, P95 Lag, Max Lag, DR Risk columns
+- DR Risk: Safe (<100 ms), Warning (100–500 ms), High Risk (>500 ms)
+
+**XCluster metrics captured:**
+- `async_replication_committed_lag_micros` (source cluster) or `consumer_safe_time_lag` (target)
+- Polled every 5 sec during each load step
+- Stored in `replication_lag_over_time.json` per step
+- Aggregated to avg, p95, max in `report.csv` and dashboard
+
+---
+
+Tunable Parameters for Load Testing
+-----------------------------------
+
+Edit the JSON configs in `config/stretch/` or `config/xcluster/` to tune load. Key parameters:
+
+| Parameter | Location | Description | Production default |
+|-----------|----------|-------------|--------------------|
+| `duration_sec` | `phases[].ramp[].duration_sec` | Seconds per step | 60 (TPS), 60/120 (capacity) |
+| `target_tps` | `phases[].ramp[].target_tps` | Rate limit (TPS mode) | 1000, 2000, 5000, 8000, 10000 |
+| `total_transactions` | `phases[].ramp[].total_transactions` | Fixed tx count (transaction_count mode) | 50000, 100000, 200000 |
+| `clients` | `phases[].ramp[].clients` | pgbench clients (≈ DB connections) | 32–256 (scaled with TPS) |
+| `jobs` | `phases[].ramp[].jobs` | pgbench worker threads | 4–8 |
+| `replication_metrics.interval_sec` | Top-level (XCluster only) | Replication lag poll interval | 5 |
+
+**Guidelines:**
+- **clients:** `clients ≥ target_tps × avg_latency_sec` (with 2–4× headroom). For 10K TPS @ 25 ms avg: ~256 clients.
+- **jobs:** Typically ≤ CPU count, ≤ clients.
+- **target_tps:** Start low (1K) and ramp up to find capacity; use replication lag (XCluster) to identify DR risk threshold.
+- **duration_sec:** Longer runs (60–120 sec) give stable metrics; shorter (20 sec) for quick validation.
+
+See `docs/CAPACITY_TESTING_AND_PGBOUNCER.md` for clients/jobs scaling and PgBouncer setup.
+
+---
+
 Runbook (5-Minute Setup)
 ------------------------
 
