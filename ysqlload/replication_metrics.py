@@ -1,20 +1,29 @@
 """
 Replication lag metrics for XCluster benchmarking.
-Fetches async_replication_committed_lag_micros from YugabyteDB tserver /metrics.
+Fetches async_replication_committed_lag_micros from YugabyteDB tserver.
+YugabyteDB exposes metrics at /prometheus-metrics (port 9000 for tserver).
 """
 import re
 import time
 from urllib.request import urlopen
+from urllib.parse import urlparse, urlunparse
 
 
-# Prometheus metric: async_replication_committed_lag_micros (source cluster)
-# consumer_safe_time_lag (target cluster, ms)
-_LAG_MICROS_RE = re.compile(
-    r"async_replication_committed_lag_micros(?:\{[^}]*\})?\s+([\d.e+-]+)"
-)
-_LAG_MS_RE = re.compile(
-    r"consumer_safe_time_lag(?:\{[^}]*\})?\s+([\d.e+-]+)"
-)
+# Prometheus metrics (source cluster): async_replication_committed_lag_micros
+# Alternative: async_replication_sent_lag_micros (older versions)
+# Target cluster: consumer_safe_time_lag (ms, transactional xCluster)
+_LAG_PATTERNS = [
+    (re.compile(r"async_replication_committed_lag_micros(?:\{[^}]*\})?\s+([\d.e+-]+)"), 1.0 / 1000.0),  # micros -> ms
+    (re.compile(r"async_replication_sent_lag_micros(?:\{[^}]*\})?\s+([\d.e+-]+)"), 1.0 / 1000.0),  # micros -> ms
+    (re.compile(r"consumer_safe_time_lag(?:\{[^}]*\})?\s+([\d.e+-]+)"), 1.0),  # already ms
+]
+
+
+def _url_with_path(url, path):
+    """Replace path in URL. e.g. http://host:9000/metrics -> http://host:9000/prometheus-metrics"""
+    parsed = urlparse(url)
+    new = parsed._replace(path=path)
+    return urlunparse(new)
 
 
 def _fetch_metrics(url, timeout_sec=5):
@@ -25,43 +34,46 @@ def _fetch_metrics(url, timeout_sec=5):
         return ""
 
 
-def _parse_lag_micros(text):
-    """Parse async_replication_committed_lag_micros from Prometheus output."""
-    for match in _LAG_MICROS_RE.finditer(text):
-        try:
-            micros = float(match.group(1))
-            return micros / 1000.0  # convert to ms
-        except (ValueError, TypeError):
-            continue
-    return None
-
-
-def _parse_lag_ms(text):
-    """Parse consumer_safe_time_lag from Prometheus output (already in ms)."""
-    for match in _LAG_MS_RE.finditer(text):
-        try:
-            return float(match.group(1))
-        except (ValueError, TypeError):
-            continue
-    return None
+def _parse_lag_from_text(text):
+    """
+    Parse replication lag from Prometheus output.
+    Tries all known metric patterns. For metrics with multiple lines (per tablet/stream),
+    returns the max value (worst-case lag).
+    """
+    best_ms = None
+    for pattern, scale in _LAG_PATTERNS:
+        for match in pattern.finditer(text):
+            try:
+                val = float(match.group(1)) * scale
+                if best_ms is None or val > best_ms:
+                    best_ms = val
+            except (ValueError, TypeError):
+                continue
+    return round(best_ms, 2) if best_ms is not None else None
 
 
 def fetch_replication_lag_ms(urls, timeout_sec=5):
     """
     Fetch replication lag from first available tserver URL.
-    Tries async_replication_committed_lag_micros (source) then consumer_safe_time_lag (target).
+    YugabyteDB uses /prometheus-metrics; tries /metrics as fallback.
     Returns lag in milliseconds or None if unavailable.
     """
     if not urls:
         return None
     for url in urls:
+        # Try URL as-is first
         text = _fetch_metrics(url, timeout_sec)
+        if not text or "async_replication" not in text and "consumer_safe_time" not in text:
+            # YugabyteDB uses /prometheus-metrics; try alternate path
+            parsed = urlparse(url)
+            alt_path = "/metrics" if parsed.path.rstrip("/").endswith("prometheus-metrics") else "/prometheus-metrics"
+            alt_url = urlunparse(parsed._replace(path=alt_path))
+            text2 = _fetch_metrics(alt_url, timeout_sec)
+            if text2:
+                text = text2
         if not text:
             continue
-        lag_ms = _parse_lag_micros(text)
-        if lag_ms is not None:
-            return lag_ms
-        lag_ms = _parse_lag_ms(text)
+        lag_ms = _parse_lag_from_text(text)
         if lag_ms is not None:
             return lag_ms
     return None

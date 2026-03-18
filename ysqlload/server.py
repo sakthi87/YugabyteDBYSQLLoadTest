@@ -179,6 +179,7 @@ def _list_runsets(run_root):
     for name in runsets:
         run_dir = os.path.join(run_root, name)
         runs = _list_runs(run_dir).get("runs", [])
-        if len(runs) >= 4:
+        # Include run sets with at least 1 run (was 4; single-run / XCluster quick tests need visibility)
+        if len(runs) >= 1:
             filtered.append(name)
     return {"runsets": filtered}

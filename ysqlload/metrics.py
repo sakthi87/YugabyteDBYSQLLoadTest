@@ -1,11 +1,25 @@
 import os
 import time
 from urllib.request import urlopen
+from urllib.parse import urlparse, urlunparse
 
 
 def fetch_metrics(url, timeout_sec=5):
-    with urlopen(url, timeout=timeout_sec) as resp:
-        return resp.read().decode("utf-8")
+    """Fetch Prometheus metrics from URL. Tries /prometheus-metrics if /metrics fails (YugabyteDB default)."""
+    def _get(u):
+        try:
+            with urlopen(u, timeout=timeout_sec) as resp:
+                return resp.read().decode("utf-8")
+        except Exception:
+            return ""
+
+    content = _get(url)
+    if not content or len(content) < 100:
+        parsed = urlparse(url)
+        alt_path = "/metrics" if "prometheus-metrics" in parsed.path else "/prometheus-metrics"
+        alt_url = urlunparse(parsed._replace(path=alt_path))
+        content = _get(alt_url)
+    return content
 
 
 def capture_metrics(urls, output_dir, label):

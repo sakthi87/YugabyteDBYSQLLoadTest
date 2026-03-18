@@ -1,0 +1,35 @@
+{
+  "run_label": "plain_tps_xcluster_local_quick",
+  "run_description": "XCluster quick test (30 sec insert) - verify lag metrics. env: ${YB_ENV_LABEL}",
+  "db": {
+    "host": "${YB_HOST}",
+    "port": "${YB_PORT}",
+    "user": "${YB_USER}",
+    "password": "${YB_PASSWORD}",
+    "dbname": "${YB_DBNAME}"
+  },
+  "schema": {
+    "create_db": false,
+    "drop_db": false,
+    "schema_sql_file": "../../../scripts/scenarios/schema_plain.sql",
+    "preload_sql_file": "../../../scripts/scenarios/preload_10_tables.sql"
+  },
+  "reports": { "csv": true, "html": true },
+  "server_metrics": {
+    "tserver_urls": ["${YB_TSERVER_METRICS}"],
+    "pg_stat_statements": true,
+    "pg_stat_statements_interval_sec": 5
+  },
+  "phases": [
+    { "name": "insert", "type": "pgbench", "log_transactions": true, "report_per_script": true, "script": "../../../scripts/pgbench10/insert.sql", "ramp": [{ "duration_sec": 30, "target_tps": 2000, "clients": 32, "jobs": 4 }] }
+  ],
+  "cluster": {
+    "cluster_type": "xcluster",
+    "cluster_topology": "3c-3e",
+    "replication_mode": "active-passive",
+    "xcluster_enabled": true
+  },
+  "replication_metrics": {
+    "interval_sec": 5
+  }
+}

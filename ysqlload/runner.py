@@ -152,23 +152,72 @@ def _query_pg_stat_statements(db, dbname, env, reset_before=False):
     """
     if reset_before:
         _, code = _run_psql_query(db, dbname, "SELECT pg_stat_statements_reset();", env)
-        if code != 0:
-            return None  # reset may need superuser
-    # PostgreSQL 14+ / YugabyteDB: total_exec_time, min_exec_time, max_exec_time
+        # Non-fatal: continue even if reset fails (e.g. non-superuser)
+    # YugabyteDB: total_time, min_time, max_time; PostgreSQL 14+: total_exec_time, min_exec_time, max_exec_time
+    # Try YugabyteDB columns first; fallback to PostgreSQL 14+ if column missing
+    # Broader patterns: ILIKE for case-insensitivity; match t1..t10 (normalized queries use $1,$2)
     sql = """
     SELECT json_build_object(
-      'mean', COALESCE(SUM(total_exec_time)::float / NULLIF(SUM(calls), 0), 0),
-      'min', COALESCE(MIN(min_exec_time), 0),
-      'max', COALESCE(MAX(max_exec_time), 0),
+      'mean', COALESCE(SUM(total_time)::float / NULLIF(SUM(calls), 0), 0),
+      'min', COALESCE(MIN(min_time), 0),
+      'max', COALESCE(MAX(max_time), 0),
       'calls', COALESCE(SUM(calls), 0)::bigint
     )::text
     FROM pg_stat_statements
-    WHERE (query LIKE '%FROM t%' OR query LIKE '%INTO t%' OR query LIKE '%UPDATE t%' OR query LIKE '%DELETE FROM t%')
-      AND query NOT LIKE '%pg_stat_statements%'
+    WHERE (
+      query ILIKE '%from t%' OR query ILIKE '%into t%' OR query ILIKE '%update t%' OR query ILIKE '%delete from t%'
+      OR query ILIKE '% t1 %' OR query ILIKE '% t2 %' OR query ILIKE '% t3 %' OR query ILIKE '% t4 %' OR query ILIKE '% t5 %'
+      OR query ILIKE '% t6 %' OR query ILIKE '% t7 %' OR query ILIKE '% t8 %' OR query ILIKE '% t9 %' OR query ILIKE '% t10 %'
+    )
+    AND query NOT LIKE '%pg_stat_statements%'
     """
     out, code = _run_psql_query(db, dbname, sql, env)
+    if code != 0:
+        # Column total_time may not exist (PostgreSQL 14+ uses total_exec_time)
+        sql_pg14 = """
+        SELECT json_build_object(
+          'mean', COALESCE(SUM(total_exec_time)::float / NULLIF(SUM(calls), 0), 0),
+          'min', COALESCE(MIN(min_exec_time), 0),
+          'max', COALESCE(MAX(max_exec_time), 0),
+          'calls', COALESCE(SUM(calls), 0)::bigint
+        )::text
+        FROM pg_stat_statements
+        WHERE (
+          query ILIKE '%from t%' OR query ILIKE '%into t%' OR query ILIKE '%update t%' OR query ILIKE '%delete from t%'
+          OR query ILIKE '% t1 %' OR query ILIKE '% t2 %' OR query ILIKE '% t3 %' OR query ILIKE '% t4 %' OR query ILIKE '% t5 %'
+          OR query ILIKE '% t6 %' OR query ILIKE '% t7 %' OR query ILIKE '% t8 %' OR query ILIKE '% t9 %' OR query ILIKE '% t10 %'
+        )
+        AND query NOT LIKE '%pg_stat_statements%'
+        """
+        out, code = _run_psql_query(db, dbname, sql_pg14, env)
     if code != 0 or not out:
-        return None
+        # Fallback 1: aggregate all statements (workload may not match filter)
+        sql_fb = """
+        SELECT json_build_object(
+          'mean', COALESCE(SUM(total_time)::float / NULLIF(SUM(calls), 0), 0),
+          'min', COALESCE(MIN(min_time), 0),
+          'max', COALESCE(MAX(max_time), 0),
+          'calls', COALESCE(SUM(calls), 0)::bigint
+        )::text
+        FROM pg_stat_statements
+        WHERE query NOT LIKE '%pg_stat_statements%'
+        """
+        out, code = _run_psql_query(db, dbname, sql_fb, env)
+        if code != 0 or not out:
+            # Fallback 2: PostgreSQL 14+ uses total_exec_time, min_exec_time, max_exec_time
+            sql_pg14 = """
+            SELECT json_build_object(
+              'mean', COALESCE(SUM(total_exec_time)::float / NULLIF(SUM(calls), 0), 0),
+              'min', COALESCE(MIN(min_exec_time), 0),
+              'max', COALESCE(MAX(max_exec_time), 0),
+              'calls', COALESCE(SUM(calls), 0)::bigint
+            )::text
+            FROM pg_stat_statements
+            WHERE query NOT LIKE '%pg_stat_statements%'
+            """
+            out, code = _run_psql_query(db, dbname, sql_pg14, env)
+            if code != 0 or not out:
+                return None
     result = None
     try:
         data = json.loads(out)
@@ -186,9 +235,13 @@ def _query_pg_stat_statements(db, dbname, env, reset_before=False):
     WITH top AS (
       SELECT yb_latency_histogram
       FROM pg_stat_statements
-      WHERE (query LIKE '%FROM t%' OR query LIKE '%INTO t%' OR query LIKE '%UPDATE t%' OR query LIKE '%DELETE FROM t%')
-        AND query NOT LIKE '%pg_stat_statements%'
-        AND yb_latency_histogram IS NOT NULL
+      WHERE (
+        query ILIKE '%from t%' OR query ILIKE '%into t%' OR query ILIKE '%update t%' OR query ILIKE '%delete from t%'
+        OR query ILIKE '% t1 %' OR query ILIKE '% t2 %' OR query ILIKE '% t3 %' OR query ILIKE '% t4 %' OR query ILIKE '% t5 %'
+        OR query ILIKE '% t6 %' OR query ILIKE '% t7 %' OR query ILIKE '% t8 %' OR query ILIKE '% t9 %' OR query ILIKE '% t10 %'
+      )
+      AND query NOT LIKE '%pg_stat_statements%'
+      AND yb_latency_histogram IS NOT NULL
       ORDER BY calls DESC
       LIMIT 1
     )

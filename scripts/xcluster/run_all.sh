@@ -31,7 +31,7 @@ port="5433"
 user="yugabyte"
 password=""
 dbname="yb_load_test"
-tserver_url="http://127.0.0.1:9000/metrics"
+tserver_url="http://127.0.0.1:9000/prometheus-metrics"
 env_label=""
 
 while [[ $# -gt 0 ]]; do
@@ -50,6 +50,7 @@ while [[ $# -gt 0 ]]; do
 done
 
 [[ -z "$run_root" ]] && run_root="runs/xcluster_$(date +%Y%m%d-%H%M%S)"
+[[ ! "$run_root" =~ [0-9]{8}-[0-9]{6} ]] && run_root="${run_root}_$(date +%Y%m%d-%H%M%S)"
 mkdir -p "$run_root"
 
 export YB_HOST="$host" YB_PORT="$port" YB_USER="$user" YB_PASSWORD="$password" YB_DBNAME="$dbname" YB_TSERVER_METRICS="$tserver_url" YB_ENV_LABEL="$env_label"

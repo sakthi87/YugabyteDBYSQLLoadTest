@@ -270,6 +270,8 @@ Running XCluster Load Tests
 
 Follow these steps to run load tests on an XCluster setup (active-passive DR).
 
+**Local testing:** You can run XCluster active-passive locally using Docker. See [docs/XCLUSTER_LOCAL_SETUP.md](docs/XCLUSTER_LOCAL_SETUP.md) for step-by-step instructions (two clusters, schema setup, replication config, and load test commands).
+
 **Prerequisites:**
 - Same as Stretch Cluster
 - XCluster replication configured (source → target)
@@ -284,7 +286,7 @@ Follow these steps to run load tests on an XCluster setup (active-passive DR).
 | `--user` | DB user | `yugabyte` |
 | `--password` | DB password | `""` |
 | `--dbname` | Database name | `yb_load_test` |
-| `--tserver-url` | **SOURCE cluster** tserver metrics URL(s) — required for replication lag | `http://source-tserver1:9000/metrics` |
+| `--tserver-url` | **SOURCE cluster** tserver metrics URL(s) — required for replication lag | `http://source-tserver1:9000/prometheus-metrics` |
 | `--env-label` | Optional label | `prod-xcluster` |
 | `--run-root` | Custom output folder (default: `runs/xcluster_<timestamp>`) | `runs/my_xcluster_run` |
 
@@ -295,28 +297,28 @@ Follow these steps to run load tests on an XCluster setup (active-passive DR).
 bash scripts/xcluster/run_all_tps.sh \
   --host <SOURCE_YSQL_HOST> --port 5433 --user yugabyte --password "" \
   --dbname yb_load_test \
-  --tserver-url "http://<SOURCE_TSERVER>:9000/metrics" \
+  --tserver-url "http://<SOURCE_TSERVER>:9000/prometheus-metrics" \
   --env-label prod-xcluster
 
 # Transaction count only
 bash scripts/xcluster/run_all_transaction_count.sh \
   --host <SOURCE_YSQL_HOST> --port 5433 --user yugabyte --password "" \
   --dbname yb_load_test \
-  --tserver-url "http://<SOURCE_TSERVER>:9000/metrics" \
+  --tserver-url "http://<SOURCE_TSERVER>:9000/prometheus-metrics" \
   --env-label prod-xcluster
 
 # Capacity only
 bash scripts/xcluster/run_all_capacity.sh \
   --host <SOURCE_YSQL_HOST> --port 5433 --user yugabyte --password "" \
   --dbname yb_load_test \
-  --tserver-url "http://<SOURCE_TSERVER>:9000/metrics" \
+  --tserver-url "http://<SOURCE_TSERVER>:9000/prometheus-metrics" \
   --env-label prod-xcluster
 
 # All 12 configs
 bash scripts/xcluster/run_all.sh \
   --host <SOURCE_YSQL_HOST> --port 5433 --user yugabyte --password "" \
   --dbname yb_load_test \
-  --tserver-url "http://<SOURCE_TSERVER>:9000/metrics" \
+  --tserver-url "http://<SOURCE_TSERVER>:9000/prometheus-metrics" \
   --env-label prod-xcluster
 ```
 
@@ -328,7 +330,7 @@ Open `http://127.0.0.1:8787`. For XCluster runs you will see:
 - DR Risk: Safe (<100 ms), Warning (100–500 ms), High Risk (>500 ms)
 
 **XCluster metrics captured:**
-- `async_replication_committed_lag_micros` (source cluster) or `consumer_safe_time_lag` (target)
+- `async_replication_committed_lag_micros` (source) or `consumer_safe_time_lag` (target). Use `http://host:9000/prometheus-metrics` (YugabyteDB default); `/metrics` is tried as fallback.
 - Polled every 5 sec during each load step
 - Stored in `replication_lag_over_time.json` per step
 - Aggregated to avg, p95, max in `report.csv` and dashboard

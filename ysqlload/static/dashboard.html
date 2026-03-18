@@ -181,12 +181,17 @@
             <div class="chart-box"><canvas id="latCombined"></canvas></div>
           </div>
           <div class="panel" style="margin-top: 20px;">
-            <h3>Server P50/P90/P95/P99 (yb_latency_histogram)</h3>
-            <div class="muted" style="margin-bottom: 8px;">Server-side (YugabyteDB): percentiles from pg_stat_statements.yb_latency_histogram.</div>
+            <h3>Server Avg + P50/P90/P95/P99 (pg_stat + yb_latency_histogram)</h3>
+            <div class="muted" style="margin-bottom: 8px;">Server-side: mean from pg_stat_statements; percentiles from yb_latency_histogram (YugabyteDB 2.18.1+).</div>
             <div id="ybPercentiles" class="chart-box" style="min-height: 180px;"></div>
           </div>
           <div class="panel" style="margin-top: 20px;">
-            <h3>Latency Breakdown (client vs server)</h3>
+            <h3>Avg Latency (client vs server)</h3>
+            <div class="muted" style="margin-bottom: 8px;">Client avg (pgbench) vs server mean (pg_stat_statements). Overhead = client − server.</div>
+            <div id="avgLatencyChart" class="chart-box" style="min-height: 180px;"></div>
+          </div>
+          <div class="panel" style="margin-top: 20px;">
+            <h3>Latency Breakdown (client vs server, P95)</h3>
             <div class="muted" style="margin-bottom: 8px;">P95 vs P95 (same as above charts). Client P95 − Server P95 = overhead (network + connection).</div>
             <div id="latencyBreakdown" class="chart-box" style="min-height: 180px;"></div>
           </div>
@@ -203,7 +208,7 @@
           </div>
           <div id="replicationPanel" class="panel" style="margin-top: 20px; display: none;">
             <h3>Replication Lag Over Time (XCluster)</h3>
-            <div class="muted" style="margin-bottom: 8px;">Replication lag during load. Shown only for XCluster runs.</div>
+            <div class="muted" style="margin-bottom: 8px;">Replication lag (ms) during load. Avg/P95/Max per step in Schema Decision Table. Use --tserver-url with /prometheus-metrics (e.g. http://host:9000/prometheus-metrics) for SOURCE cluster.</div>
             <select id="replicationStepSelect" style="margin-bottom: 8px;"></select>
             <div id="replicationOverTime" class="chart-box" style="min-height: 200px;"></div>
           </div>
@@ -236,6 +241,16 @@
       let schemaById = {};
       let currentRunset = "";
       let currentRun = "";
+
+      /** Bar chart options: thinner bars when few categories, prevents huge single bars */
+      function barChartOptions(labelsCount) {
+        const n = Math.max(1, labelsCount);
+        return {
+          barPercentage: Math.min(0.85, 0.2 + 0.5 / n),
+          categoryPercentage: Math.min(0.9, 0.25 + 0.55 / n),
+          maxBarThickness: Math.min(72, Math.max(24, 320 / n))
+        };
+      }
 
       async function fetchJson(url) {
         const res = await fetch(url);
@@ -275,11 +290,10 @@
       const SCHEMA_ORDER = ["plain", "index", "fk", "index_fk"];
 
       function formatRunLabel(name, label) {
-        if (label && label.trim()) {
-          return label.trim().replace(/_/g, " ");
-        }
-        const shortTime = name && name.length >= 12 ? name.slice(9, 15) : name;
-        return shortTime ? `Run ${shortTime}` : name;
+        const base = label && label.trim()
+          ? label.trim().replace(/_/g, " ")
+          : (name && name.length >= 12 ? `Run ${name.slice(9, 15)}` : name) || name;
+        return name ? `${base} (${name})` : base;
       }
 
       async function loadRunSets() {
@@ -289,7 +303,7 @@
         if (!sorted.length) {
           const opt = document.createElement("option");
           opt.value = "";
-          opt.textContent = "No run sets with 4 runs found";
+          opt.textContent = "No run sets found";
           runSetSelect.appendChild(opt);
           return;
         }
@@ -445,39 +459,80 @@
       }
 
       function drawYbPercentiles(rows) {
-        const pg = rows.filter(r => {
-          if (r.type !== "pgbench") return false;
-          const v = Number(r.yb_p99_ms);
-          return r.yb_p99_ms != null && r.yb_p99_ms !== "" && isFinite(v) && v >= 0;
-        });
+        const pg = rows.filter(r => r.type === "pgbench");
         const container = document.getElementById("ybPercentiles");
-        if (!pg.length) {
-          container.innerHTML = "<div class=\"muted\">No yb_latency_histogram data. Requires YugabyteDB 2.18.1+.</div>";
+        const hasMean = pg.some(r => safeNum(r.pg_stat_mean_ms) != null);
+        const hasPct = pg.some(r => safeNum(r.yb_p95_ms) != null);
+        if (!pg.length || (!hasMean && !hasPct)) {
+          container.innerHTML = "<div class=\"muted\">No pg_stat or yb_latency_histogram data. Enable server_metrics.pg_stat_statements.</div>";
           return;
         }
         const labels = pg.map(r => (r.step || r.phase || ""));
-        const p50 = pg.map(r => safeNum(r.yb_p50_ms) ?? 0);
-        const p90 = pg.map(r => safeNum(r.yb_p90_ms) ?? 0);
-        const p95 = pg.map(r => safeNum(r.yb_p95_ms) ?? 0);
-        const p99 = pg.map(r => safeNum(r.yb_p99_ms) ?? 0);
+        const mean = pg.map(r => safeNum(r.pg_stat_mean_ms) ?? null);
+        const p50 = pg.map(r => safeNum(r.yb_p50_ms) ?? null);
+        const p90 = pg.map(r => safeNum(r.yb_p90_ms) ?? null);
+        const p95 = pg.map(r => safeNum(r.yb_p95_ms) ?? null);
+        const p99 = pg.map(r => safeNum(r.yb_p99_ms) ?? null);
+        const datasets = [];
+        if (hasMean) datasets.push({ label: "Avg (mean ms)", data: mean, borderColor: "#60a5fa" });
+        if (hasPct) {
+          datasets.push({ label: "P50 (ms)", data: p50, borderColor: "#34d399" });
+          datasets.push({ label: "P90 (ms)", data: p90, borderColor: "#fbbf24" });
+          datasets.push({ label: "P95 (ms)", data: p95, borderColor: "#f87171" });
+          datasets.push({ label: "P99 (ms)", data: p99, borderColor: "#a78bfa" });
+        }
         if (charts.ybPercentiles) charts.ybPercentiles.destroy();
         const canvas = document.createElement("canvas");
         container.innerHTML = "";
         container.appendChild(canvas);
         charts.ybPercentiles = new Chart(canvas, {
           type: "line",
+          data: { labels, datasets },
+          options: {
+            responsive: true,
+            scales: {
+              y: { beginAtZero: true, title: { display: true, text: "Latency (ms)" } }
+            }
+          }
+        });
+      }
+
+      function drawAvgLatencyChart(rows) {
+        const pg = rows.filter(r => {
+          if (r.type !== "pgbench") return false;
+          const c = safeNum(r.latency_avg_ms);
+          const s = safeNum(r.pg_stat_mean_ms);
+          return (c != null || s != null);
+        });
+        const container = document.getElementById("avgLatencyChart");
+        if (!pg.length) {
+          container.innerHTML = "<div class=\"muted\">No avg latency data. Enable server_metrics.pg_stat_statements.</div>";
+          return;
+        }
+        const labels = pg.map(r => (r.step || r.phase || ""));
+        const client = pg.map(r => safeNum(r.latency_avg_ms) ?? 0);
+        const server = pg.map(r => safeNum(r.pg_stat_mean_ms) ?? 0);
+        const overhead = pg.map(r => Math.max(0, (safeNum(r.latency_avg_ms) ?? 0) - (safeNum(r.pg_stat_mean_ms) ?? 0)));
+        if (charts.avgLatencyChart) charts.avgLatencyChart.destroy();
+        const canvas = document.createElement("canvas");
+        container.innerHTML = "";
+        container.appendChild(canvas);
+        const barOpts = barChartOptions(labels.length);
+        charts.avgLatencyChart = new Chart(canvas, {
+          type: "bar",
           data: {
             labels,
             datasets: [
-              { label: "P50 (ms)", data: p50, borderColor: "#60a5fa" },
-              { label: "P90 (ms)", data: p90, borderColor: "#34d399" },
-              { label: "P95 (ms)", data: p95, borderColor: "#fbbf24" },
-              { label: "P99 (ms)", data: p99, borderColor: "#f87171" }
+              { label: "Client Avg (pgbench) ms", data: client, backgroundColor: "#60a5fa" },
+              { label: "Server Mean (pg_stat) ms", data: server, backgroundColor: "#34d399" },
+              { label: "Overhead ms", data: overhead, backgroundColor: "#fbbf24" }
             ]
           },
           options: {
             responsive: true,
+            datasets: { bar: barOpts },
             scales: {
+              x: { stacked: false },
               y: { beginAtZero: true, title: { display: true, text: "Latency (ms)" } }
             }
           }
@@ -504,6 +559,7 @@
         const canvas = document.createElement("canvas");
         container.innerHTML = "";
         container.appendChild(canvas);
+        const barOpts = barChartOptions(labels.length);
         charts.latencyBreakdown = new Chart(canvas, {
           type: "bar",
           data: {
@@ -516,6 +572,7 @@
           },
           options: {
             responsive: true,
+            datasets: { bar: barOpts },
             scales: {
               x: { stacked: false },
               y: { beginAtZero: true, title: { display: true, text: "Latency (ms)" } }
@@ -537,6 +594,7 @@
         const canvas = document.createElement("canvas");
         container.innerHTML = "";
         container.appendChild(canvas);
+        const barOpts = barChartOptions(labels.length);
         charts.clientsChart = new Chart(canvas, {
           type: "bar",
           data: {
@@ -545,6 +603,7 @@
           },
           options: {
             responsive: true,
+            datasets: { bar: barOpts },
             scales: {
               x: { title: { display: true, text: "Step" } },
               y: { beginAtZero: true, title: { display: true, text: "Clients" } }
@@ -588,11 +647,13 @@
           if (charts[id]) { charts[id].destroy(); charts[id] = null; }
         });
         if (charts.tpsCombined) charts.tpsCombined.destroy();
+        const barOpts = barChartOptions(labels.length);
         charts.tpsCombined = new Chart(document.getElementById("tpsCombined"), {
           type: "bar",
           data: { labels, datasets },
           options: {
             responsive: true,
+            datasets: { bar: barOpts },
             scales: {
               y: { beginAtZero: true, title: { display: true, text: "TPS" } },
               x: { title: { display: true, text: "Target TPS / Step" } }
@@ -652,6 +713,7 @@
         const rows = parseCsv(csv);
         drawCharts(rows);
         drawLatencyBreakdown(rows);
+        drawAvgLatencyChart(rows);
         drawClientsChart(rows);
         drawYbPercentiles(rows);
         drawTable(rows);
@@ -724,21 +786,32 @@
           const data = await fetchJsonOrSanitized(`/api/run/${runset}/${run}/step/${stepName}/replication_lag_over_time`);
           const snapshots = data.snapshots || [];
           if (!snapshots.length) {
-            container.innerHTML = "<div class=\"muted\">No snapshots.</div>";
+            container.innerHTML = "<div class=\"muted\">No snapshots. Ensure --tserver-url points to SOURCE cluster with /prometheus-metrics (e.g. http://host:9000/prometheus-metrics).</div>";
             return;
           }
           const labels = snapshots.map(s => s.elapsed_sec + "s");
           const lag = snapshots.map(s => safeNum(s.lag_ms));
+          const validLags = lag.filter(v => v != null);
+          let avgRunning = [];
+          if (validLags.length) {
+            let sum = 0;
+            let count = 0;
+            avgRunning = lag.map(v => {
+              if (v != null) { sum += v; count++; }
+              return count > 0 ? Math.round(sum / count * 100) / 100 : null;
+            });
+          }
           if (charts.replicationOverTime) charts.replicationOverTime.destroy();
           const canvas = document.createElement("canvas");
           container.innerHTML = "";
           container.appendChild(canvas);
+          const datasets = [{ label: "Lag (ms)", data: lag, borderColor: "#a78bfa" }];
+          if (validLags.length) {
+            datasets.push({ label: "Avg (running) ms", data: avgRunning, borderColor: "#34d399", borderDash: [5, 5] });
+          }
           charts.replicationOverTime = new Chart(canvas, {
             type: "line",
-            data: {
-              labels,
-              datasets: [{ label: "Replication Lag (ms)", data: lag, borderColor: "#a78bfa" }]
-            },
+            data: { labels, datasets },
             options: {
               responsive: true,
               scales: {
@@ -959,6 +1032,7 @@
           return agg.efficiency != null ? agg.efficiency : 0;
         });
         const barColors = eff.map(e => e >= 0.9 ? "#34d399" : e >= 0.8 ? "#fbbf24" : "#f87171");
+        const barOpts = barChartOptions(sortedRuns.length);
         charts.throughputEfficiency = new Chart(canvas, {
           type: "bar",
           data: {
@@ -967,6 +1041,7 @@
           },
           options: {
             responsive: true,
+            datasets: { bar: barOpts },
             scales: {
               y: { beginAtZero: true, max: 1, title: { display: true, text: "Efficiency (0–1)" } }
             }
@@ -989,11 +1064,13 @@
           });
           return { label: schemaById[run] || run, data, backgroundColor: colors[i % colors.length] };
         });
+        const barOpts = barChartOptions(ops.length);
         charts.operationLatency = new Chart(canvas, {
           type: "bar",
           data: { labels: ops.map(o => o.toUpperCase()), datasets },
           options: {
             responsive: true,
+            datasets: { bar: barOpts },
             scales: {
               y: { beginAtZero: true, title: { display: true, text: "P95 latency (ms)" } }
             }
@@ -1025,6 +1102,7 @@
           server.push(serverP95);
           overhead.push(Math.max(0, clientP95 - serverP95));
         });
+        const barOpts = barChartOptions(sortedRuns.length);
         charts.clientServerBreakdown = new Chart(canvas, {
           type: "bar",
           data: {
@@ -1036,6 +1114,7 @@
           },
           options: {
             responsive: true,
+            datasets: { bar: barOpts },
             scales: {
               x: { stacked: true },
               y: { stacked: true, beginAtZero: true, title: { display: true, text: "Latency (ms)" } }
