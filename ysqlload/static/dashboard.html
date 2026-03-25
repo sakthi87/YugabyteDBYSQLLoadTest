@@ -208,7 +208,12 @@
           </div>
           <div id="replicationPanel" class="panel" style="margin-top: 20px; display: none;">
             <h3>Replication Lag Over Time (XCluster)</h3>
-            <div class="muted" style="margin-bottom: 8px;">Replication lag (ms) during load. Avg/P95/Max per step in Schema Decision Table. Use --tserver-url with /prometheus-metrics (e.g. http://host:9000/prometheus-metrics) for SOURCE cluster.</div>
+            <div class="muted" style="margin-bottom: 8px;">
+              <strong>What is plotted:</strong> Each point is <em>not</em> a histogram. It is the current replication lag sampled from the SOURCE tserver Prometheus endpoint (typically <code>async_replication_committed_lag_micros</code>, worst tablet/stream, converted to ms). Poll interval matches <code>replication_metrics.interval_sec</code> in config.
+              <br /><strong>Sample lag (ms):</strong> instantaneous lag at each poll.
+              <br /><strong>Cumulative mean (running):</strong> mean of all sample values from the start of the step through each point (running average).
+              <br /><strong>Step min / mean / max / P95:</strong> horizontal reference lines for this step only (same math as <code>replication_summary</code> in <code>summary.json</code>).
+            </div>
             <select id="replicationStepSelect" style="margin-bottom: 8px;"></select>
             <div id="replicationOverTime" class="chart-box" style="min-height: 200px;"></div>
           </div>
@@ -257,16 +262,53 @@
         return res.json();
       }
 
+      /** Split one CSV line respecting double-quoted fields (commas inside quotes must not break columns). */
+      function parseCsvLine(line) {
+        const cols = [];
+        let field = "";
+        let inQuote = false;
+        for (let i = 0; i < line.length; i++) {
+          const c = line[i];
+          if (c === '"') {
+            if (inQuote && line[i + 1] === '"') {
+              field += '"';
+              i++;
+            } else {
+              inQuote = !inQuote;
+            }
+            continue;
+          }
+          if (c === "," && !inQuote) {
+            cols.push(field);
+            field = "";
+            continue;
+          }
+          field += c;
+        }
+        cols.push(field);
+        return cols;
+      }
+
       function parseCsv(text) {
-        const lines = text.trim().replace(/\r\n/g, "\n").replace(/\r/g, "\n").split("\n");
-        const headers = lines[0].split(",").map(h => h.trim());
-        const rows = lines.slice(1).map(line => {
-          const cols = line.split(",");
+        const lines = text.trim().replace(/\r\n/g, "\n").replace(/\r/g, "\n").split("\n").filter(l => l.length);
+        if (!lines.length) return [];
+        const headers = parseCsvLine(lines[0]).map(h => h.trim());
+        return lines.slice(1).map(line => {
+          const cols = parseCsvLine(line);
           const obj = {};
-          headers.forEach((h, i) => obj[h] = (cols[i] || "").trim());
+          headers.forEach((h, i) => {
+            obj[h] = (cols[i] != null ? String(cols[i]) : "").trim();
+          });
           return obj;
         });
-        return rows;
+      }
+
+      /** Match target TPS across CSV/JSON (avoids 10k vs 9999.99 float issues). */
+      function targetTpsEquals(a, b) {
+        const x = safeNum(a);
+        const y = safeNum(b);
+        if (x == null || y == null || x <= 0 || y <= 0) return false;
+        return Math.round(x) === Math.round(y);
       }
 
       function inferLabelFromSummary(summary) {
@@ -618,12 +660,12 @@
         const opColors = ["#60a5fa", "#34d399", "#fbbf24", "#f87171"];
 
         // Combined TPS chart: all 4 operations in one, grouped by target TPS
-        const tpsLevels = [...new Set(pg.map(r => safeNum(r.target_tps) ?? 0).filter(v => v > 0))].sort((a, b) => a - b);
+        const tpsLevels = [...new Set(pg.map(r => Math.round(safeNum(r.target_tps) ?? 0)).filter(v => v > 0))].sort((a, b) => a - b);
         const labels = tpsLevels.length ? tpsLevels.map(t => `${t} TPS`) : ["Step"];
         const datasets = ops.map((op, i) => {
           const opRows = pg.filter(r => (r.operation || "").toLowerCase() === op);
           const data = tpsLevels.map(t => {
-            const match = opRows.find(r => (safeNum(r.target_tps) ?? 0) === t);
+            const match = opRows.find(r => targetTpsEquals(r.target_tps, t));
             return match ? (safeNum(match.tps) ?? null) : null;
           });
           return { label: op.toUpperCase(), data, backgroundColor: opColors[i] };
@@ -791,32 +833,51 @@
           }
           const labels = snapshots.map(s => s.elapsed_sec + "s");
           const lag = snapshots.map(s => safeNum(s.lag_ms));
-          const validLags = lag.filter(v => v != null);
+          const validLags = lag.filter(v => v != null && Number.isFinite(v));
           let avgRunning = [];
           if (validLags.length) {
             let sum = 0;
             let count = 0;
             avgRunning = lag.map(v => {
-              if (v != null) { sum += v; count++; }
+              if (v != null && Number.isFinite(v)) { sum += v; count++; }
               return count > 0 ? Math.round(sum / count * 100) / 100 : null;
             });
           }
+          let minL = null, maxL = null, meanL = null, p95L = null;
+          if (validLags.length) {
+            const sorted = [...validLags].sort((a, b) => a - b);
+            const n = sorted.length;
+            minL = sorted[0];
+            maxL = sorted[n - 1];
+            meanL = Math.round((validLags.reduce((a, b) => a + b, 0) / n) * 100) / 100;
+            const p95idx = Math.max(0, Math.min(n - 1, Math.ceil(n * 0.95) - 1));
+            p95L = sorted[p95idx];
+          }
+          const fillConst = (v) => labels.map(() => (v != null ? v : null));
           if (charts.replicationOverTime) charts.replicationOverTime.destroy();
           const canvas = document.createElement("canvas");
           container.innerHTML = "";
           container.appendChild(canvas);
-          const datasets = [{ label: "Lag (ms)", data: lag, borderColor: "#a78bfa" }];
+          const datasets = [
+            { label: "Sample lag (ms)", data: lag, borderColor: "#a78bfa", backgroundColor: "rgba(167, 139, 250, 0.15)", fill: false, tension: 0.1 }
+          ];
           if (validLags.length) {
-            datasets.push({ label: "Avg (running) ms", data: avgRunning, borderColor: "#34d399", borderDash: [5, 5] });
+            datasets.push({ label: "Cumulative mean (running, ms)", data: avgRunning, borderColor: "#34d399", borderDash: [5, 5], fill: false, tension: 0.1 });
+            if (minL != null) datasets.push({ label: "Step min lag (ms)", data: fillConst(minL), borderColor: "#22d3ee", borderDash: [2, 4], pointRadius: 0, fill: false });
+            if (meanL != null) datasets.push({ label: "Step mean lag (ms)", data: fillConst(meanL), borderColor: "#fbbf24", borderDash: [4, 4], pointRadius: 0, fill: false });
+            if (p95L != null) datasets.push({ label: "Step P95 lag (ms)", data: fillConst(p95L), borderColor: "#f87171", borderDash: [6, 3], pointRadius: 0, fill: false });
+            if (maxL != null) datasets.push({ label: "Step max lag (ms)", data: fillConst(maxL), borderColor: "#fb7185", borderDash: [2, 2], pointRadius: 0, fill: false });
           }
           charts.replicationOverTime = new Chart(canvas, {
             type: "line",
             data: { labels, datasets },
             options: {
               responsive: true,
+              interaction: { mode: "index", intersect: false },
+              plugins: { legend: { position: "bottom", labels: { boxWidth: 10, font: { size: 10 } } } },
               scales: {
                 x: { title: { display: true, text: "Elapsed (sec)" } },
-                y: { beginAtZero: true, title: { display: true, text: "Lag (ms)" } }
+                y: { beginAtZero: true, title: { display: true, text: "Replication lag (ms)" } }
               }
             }
           });
@@ -849,14 +910,14 @@
         const ops = ["select", "insert", "update", "delete"];
         const tpsSet = new Set();
         pg.forEach(r => {
-          const t = safeNum(r.target_tps) ?? 0;
+          const t = Math.round(safeNum(r.target_tps) ?? 0);
           if (t > 0) tpsSet.add(t);
         });
         const tpsLevels = [...tpsSet].sort((a, b) => a - b);
         const minTps = tpsLevels[0] || 0;
         const byTps = {};
         tpsLevels.forEach(t => {
-          const atTps = pg.filter(r => (safeNum(r.target_tps) ?? 0) === t);
+          const atTps = pg.filter(r => targetTpsEquals(r.target_tps, t));
           const p95Vals = atTps.map(r => safeNum(r.latency_p95_ms)).filter(v => v != null);
           const tpsVals = atTps.map(r => safeNum(r.tps)).filter(v => v != null);
           const effVals = atTps.map(r => {
@@ -943,7 +1004,7 @@
 
       function getReplicationFromRows(rows, maxTps) {
         const pg = (rows || []).filter(r => r.type === "pgbench");
-        const atMax = pg.filter(r => (safeNum(r.target_tps) ?? 0) === maxTps);
+        const atMax = pg.filter(r => targetTpsEquals(r.target_tps, maxTps));
         if (!atMax.length) return null;
         const avgV = atMax.map(r => safeNum(r.replication_avg_lag_ms)).filter(v => v != null);
         const p95V = atMax.map(r => safeNum(r.replication_p95_lag_ms)).filter(v => v != null);
@@ -1059,7 +1120,7 @@
           const rows = rowsByRun[run] || [];
           const pg = rows.filter(r => r.type === "pgbench");
           const data = ops.map(op => {
-            const match = pg.find(r => (r.operation || "").toLowerCase() === op && (safeNum(r.target_tps) ?? 0) === maxTps);
+            const match = pg.find(r => (r.operation || "").toLowerCase() === op && targetTpsEquals(r.target_tps, maxTps));
             return safeNum(match ? match.latency_p95_ms : null) ?? 0;
           });
           return { label: schemaById[run] || run, data, backgroundColor: colors[i % colors.length] };
@@ -1086,7 +1147,7 @@
         sortedRuns.forEach(run => {
           const rows = rowsByRun[run] || [];
           rows.filter(r => r.type === "pgbench").forEach(r => {
-            const t = safeNum(r.target_tps) ?? 0;
+            const t = Math.round(safeNum(r.target_tps) ?? 0);
             if (t > 0) tpsSet.add(t);
           });
         });
@@ -1096,7 +1157,7 @@
         sortedRuns.forEach(run => {
           const rows = rowsByRun[run] || [];
           const pg = rows.filter(r => r.type === "pgbench");
-          const atMax = pg.filter(r => (safeNum(r.target_tps) ?? 0) === maxTps);
+          const atMax = pg.filter(r => targetTpsEquals(r.target_tps, maxTps));
           const serverP95 = atMax.length ? atMax.reduce((s, r) => s + (safeNum(r.yb_p95_ms) ?? 0), 0) / atMax.length : 0;
           const clientP95 = atMax.length ? atMax.reduce((s, r) => s + (safeNum(r.latency_p95_ms) ?? 0), 0) / atMax.length : 0;
           server.push(serverP95);

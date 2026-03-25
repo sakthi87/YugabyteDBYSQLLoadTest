@@ -205,6 +205,16 @@ Running Stretch Cluster Load Tests
 
 Follow these steps to run load tests on a Stretch Cluster (2c-2e-1onprem or similar).
 
+**Run TPS, transaction count, or capacity separately** (each script runs four schema configs: plain, index, fk, index_fk):
+
+```bash
+bash scripts/stretch/run_all_tps.sh --host <YSQL_HOST> --port 5433 --user yugabyte --password "" --dbname yb_load_test --tserver-url "http://<TSERVER>:9000/metrics" --env-label my-stretch
+
+bash scripts/stretch/run_all_transaction_count.sh --host <YSQL_HOST> --port 5433 --user yugabyte --password "" --dbname yb_load_test --tserver-url "http://<TSERVER>:9000/metrics" --env-label my-stretch
+
+bash scripts/stretch/run_all_capacity.sh --host <YSQL_HOST> --port 5433 --user yugabyte --password "" --dbname yb_load_test --tserver-url "http://<TSERVER>:9000/metrics" --env-label my-stretch
+```
+
 **Prerequisites:**
 - pgbench, psql, Python 3.9+
 - VM in the same region as your Stretch Cluster leaders (e.g., Azure Central)

@@ -3,6 +3,7 @@ Replication lag metrics for XCluster benchmarking.
 Fetches async_replication_committed_lag_micros from YugabyteDB tserver.
 YugabyteDB exposes metrics at /prometheus-metrics (port 9000 for tserver).
 """
+import math
 import re
 import time
 from urllib.request import urlopen
@@ -110,8 +111,10 @@ def aggregate_lag_snapshot(snapshots):
         return None
     vals = sorted(vals)
     n = len(vals)
-    p95_idx = max(0, int(n * 0.95) - 1)
+    # Use ceil so sparse spikes count toward P95 (int() was too low for small n, e.g. n=6 -> idx 4 not 5)
+    p95_idx = max(0, min(n - 1, int(math.ceil(n * 0.95)) - 1))
     return {
+        "min_lag_ms": round(vals[0], 2),
         "avg_lag_ms": round(sum(vals) / n, 2),
         "p95_lag_ms": round(vals[p95_idx], 2),
         "max_lag_ms": round(max(vals), 2),

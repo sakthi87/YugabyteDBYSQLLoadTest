@@ -69,6 +69,7 @@ def _flatten_rows(summary):
                         "yb_p95_ms": _pg_stat(step, "yb_p95_ms"),
                         "yb_p99_ms": _pg_stat(step, "yb_p99_ms"),
                         "replication_avg_lag_ms": _replication(step, "avg_lag_ms"),
+                        "replication_min_lag_ms": _replication(step, "min_lag_ms"),
                         "replication_p95_lag_ms": _replication(step, "p95_lag_ms"),
                         "replication_max_lag_ms": _replication(step, "max_lag_ms"),
                     }
@@ -110,6 +111,7 @@ def _flatten_rows(summary):
                     "yb_p95_ms": _pg_stat(phase, "yb_p95_ms"),
                     "yb_p99_ms": _pg_stat(phase, "yb_p99_ms"),
                     "replication_avg_lag_ms": _replication(phase, "avg_lag_ms"),
+                    "replication_min_lag_ms": _replication(phase, "min_lag_ms"),
                     "replication_p95_lag_ms": _replication(phase, "p95_lag_ms"),
                     "replication_max_lag_ms": _replication(phase, "max_lag_ms"),
                 }
@@ -161,6 +163,7 @@ def _write_csv(rows, path):
         "yb_p95_ms",
         "yb_p99_ms",
         "replication_avg_lag_ms",
+        "replication_min_lag_ms",
         "replication_p95_lag_ms",
         "replication_max_lag_ms",
     ]
