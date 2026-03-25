@@ -177,6 +177,49 @@ Each mode has 4 schema variants: `plain`, `index`, `fk`, `index_fk`.
 - **Transaction count**: Fixed records (`total_transactions`). Dev: 10K/20K/50K. Production: 50K/100K/200K.
 - **Capacity**: Max throughput (`duration_sec` only, no rate limit). Dev: 60/120 sec. Production: 60/120 sec with scaled clients.
 
+Running each load separately
+----------------------------
+
+There are two levels of scope: **load mode** (TPS vs transaction count vs capacity) and **single scenario** (one JSON file = one schema variant in one mode).
+
+### 1. By load mode (TPS, transaction count, or capacity)
+
+Use the per-mode script instead of the environment’s full `run_all.sh`. Each script runs the **four schema variants** (plain, index, fk, index_fk) for that mode only.
+
+| Environment | TPS only | Transaction count only | Capacity only | All three modes (12 configs) |
+|-------------|----------|------------------------|---------------|------------------------------|
+| dev | `scripts/dev/run_all_tps.sh` | `scripts/dev/run_all_transaction_count.sh` | `scripts/dev/run_all_capacity.sh` | `scripts/dev/run_all.sh` |
+| production | `scripts/production/run_all_tps.sh` | `scripts/production/run_all_transaction_count.sh` | `scripts/production/run_all_capacity.sh` | `scripts/production/run_all.sh` |
+| stretch | `scripts/stretch/run_all_tps.sh` | `scripts/stretch/run_all_transaction_count.sh` | `scripts/stretch/run_all_capacity.sh` | `scripts/stretch/run_all.sh` |
+| xcluster | `scripts/xcluster/run_all_tps.sh` | `scripts/xcluster/run_all_transaction_count.sh` | `scripts/xcluster/run_all_capacity.sh` | `scripts/xcluster/run_all.sh` |
+| validation | — | — | — | `scripts/validation/run_all.sh` (only combined script) |
+
+Validation has no `run_all_tps.sh` wrappers; use the CLI in the next subsection or point `--config` at files under `config/validation/tps/`, `config/validation/transaction_count/`, or `config/validation/capacity/`.
+
+**Convenience aliases** in `scripts/` (both run **TPS only**, four configs):
+
+- `scripts/run_all.sh` — same as `scripts/dev/run_all_tps.sh`
+- `scripts/run_all_production.sh` — same as `scripts/production/run_all_tps.sh`
+
+Use the same flags as elsewhere: `--host`, `--port`, `--user`, `--password`, `--dbname`, `--tserver-url`, `--env-label`, `--run-root`. Examples for stretch and xcluster are in the sections below.
+
+### 2. By single scenario (one config file)
+
+Each JSON file is one **schema variant** within one **mode**. From the repo root, set `YB_*` variables (see Parameterization) and run:
+
+```bash
+export YB_HOST=127.0.0.1 YB_PORT=5433 YB_USER=yugabyte YB_PASSWORD="" \
+  YB_DBNAME=yb_load_test YB_TSERVER_METRICS="http://127.0.0.1:9000/metrics" \
+  YB_ENV_LABEL="single-run"
+
+mkdir -p runs/my_single
+python3 -m ysqlload.cli --config config/dev/tps/plain.json --run-root runs/my_single
+```
+
+Replace the config path with any file matching `config/<environment>/<mode>/<plain|index|fk|index_fk>.json` (for example `config/xcluster/capacity/index_fk.json`).
+
+Add `--serve` to start the dashboard after that run, or run `python3 -m ysqlload.cli --serve-only --run-root runs/my_single` later.
+
 See `docs/CAPACITY_TESTING_AND_PGBOUNCER.md` for:
 - Clients/jobs scaling, connection reuse, PgBouncer setup
 - Stretch Cluster and XCluster implementation steps
